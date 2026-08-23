@@ -30,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,8 +126,22 @@ fun LyricsSheet(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    itemsIndexed(lyricsLines) { index, line ->
+                    itemsIndexed(lyricsLines, key = { i, _ -> i }) { index, line ->
                         val isActive = index == activeIndex
+                        // Premium active-line emphasis: animated color + scale
+                        val lineColor by androidx.compose.animation.animateColorAsState(
+                            targetValue = if (isActive) PrimaryCyan else TextSecondary.copy(alpha = 0.5f),
+                            animationSpec = androidx.compose.animation.core.tween(300),
+                            label = "lyricColor"
+                        )
+                        val lineScale by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = if (isActive) 1f else 0.88f,
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                            ),
+                            label = "lyricScale"
+                        )
                         Text(
                             text = line.text,
                             style = MaterialTheme.typography.headlineSmall.copy(
@@ -134,9 +149,10 @@ fun LyricsSheet(
                                 fontSize = if (isActive) 22.sp else 16.sp,
                                 textAlign = TextAlign.Center
                             ),
-                            color = if (isActive) PrimaryCyan else TextSecondary.copy(alpha = 0.5f),
+                            color = lineColor,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .scale(lineScale)
                                 .padding(vertical = 4.dp)
                         )
                     }

@@ -1,10 +1,18 @@
 package com.tensorix.antigravityplayer.ui.components
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,7 +29,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,6 +40,7 @@ import coil.compose.AsyncImage
 import com.tensorix.antigravityplayer.data.Song
 import com.tensorix.antigravityplayer.ui.theme.*
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MiniPlayer(
     song: Song?,
@@ -41,6 +52,8 @@ fun MiniPlayer(
     onNextClick: () -> Unit
 ) {
     if (song == null) return
+
+    val haptics = LocalHapticFeedback.current
 
     // Phase 22: high-frequency position updates are collected HERE so only
     // this subtree recomposes on each tick, never the whole application.
@@ -63,33 +76,46 @@ fun MiniPlayer(
         label = "glowAlpha"
     )
 
+    // Premium micro-interactions (press-scale + synced ripple suppression)
+    val barPress = rememberPressInteraction()
+    val playPress = rememberPressInteraction()
+    val nextPress = rememberPressInteraction()
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 6.dp)
-            .shadow(12.dp, RoundedCornerShape(18.dp), spotColor = PrimaryCyan.copy(alpha = glowAlpha))
-            .clip(RoundedCornerShape(18.dp))
+            .shadow(14.dp, RoundedCornerShape(20.dp), spotColor = PrimaryCyan.copy(alpha = glowAlpha))
+            .clip(RoundedCornerShape(20.dp))
             .background(
                 brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFF0C0F18),
-                        Color(0xFF121624)
-                    )
+                    colors = listOf(Color(0xFF0C0F18), Color(0xFF131828))
                 )
             )
-            .border(1.dp, Color(0x2AFFFFFF), RoundedCornerShape(18.dp))
-            .clickable { onMiniPlayerClick() }
+            .border(1.dp, Color(0x2AFFFFFF), RoundedCornerShape(20.dp))
+            .clickable(interactionSource = barPress, indication = null) { onMiniPlayerClick() }
+            .pressScale(barPress, pressedScale = 0.985f, hapticOnPress = false)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Ultra-Thin 2dp Neon Cyan Progress Indicator
-            LinearProgressIndicator(
-                progress = { progressFraction },
+            // Gradient progress track with rounded caps (premium replacement
+            // for the stock LinearProgressIndicator).
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.5.dp),
-                color = PrimaryCyan,
-                trackColor = Color(0x1AFFFFFF)
-            )
+                    .height(3.dp)
+                    .background(Color(0x1AFFFFFF))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(PrimaryCyan, SecondaryViolet)
+                            )
+                        )
+                )
+            }
 
             Row(
                 modifier = Modifier
@@ -97,13 +123,13 @@ fun MiniPlayer(
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // High-End Artwork Thumbnail
+                // Artwork thumbnail with subtle accent ring
                 Box(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0xFF161A28))
-                        .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(12.dp)),
+                        .border(1.dp, PrimaryCyan.copy(alpha = 0.25f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (!song.albumArtUri.isNullOrEmpty()) {
@@ -125,7 +151,6 @@ fun MiniPlayer(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Title & Artist with Hi-Fi Tag
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -136,8 +161,9 @@ fun MiniPlayer(
                             ),
                             color = TextPrimary,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(iterations = Int.MAX_VALUE)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         HiFiBadge(modifier = Modifier.scale(0.7f))
@@ -167,33 +193,52 @@ fun MiniPlayer(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Tactile Circular Play/Pause Button
+                // Play/Pause with animated icon morph + press bounce + haptics
                 Box(
                     modifier = Modifier
                         .size(38.dp)
                         .clip(CircleShape)
                         .background(
-                            brush = Brush.horizontalGradient(
+                            brush = Brush.linearGradient(
                                 colors = listOf(PrimaryCyan, SecondaryViolet)
                             )
                         )
-                        .clickable { onPlayPauseClick() },
+                        .clickable(interactionSource = playPress, indication = null) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onPlayPauseClick()
+                        }
+                        .pressScale(playPress, pressedScale = 0.88f, hapticOnPress = false),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.Black,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    AnimatedContent(
+                        targetState = isPlaying,
+                        transitionSpec = {
+                            (scaleIn(initialScale = 0.6f) + fadeIn()) togetherWith
+                                (scaleOut(targetScale = 0.6f) + fadeOut())
+                        },
+                        label = "playPauseMorph"
+                    ) { playing ->
+                        Icon(
+                            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play",
+                            tint = Color.Black,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // Next Track Button
-                IconButton(
-                    onClick = onNextClick,
-                    modifier = Modifier.size(38.dp)
+                // Next-track button with press bounce
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .clickable(interactionSource = nextPress, indication = null) {
+                            onNextClick()
+                        }
+                        .pressScale(nextPress, pressedScale = 0.85f, hapticOnPress = false),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,

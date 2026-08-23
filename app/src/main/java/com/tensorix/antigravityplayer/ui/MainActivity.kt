@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -124,6 +125,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Premium edge-to-edge: content draws behind transparent system bars.
+        enableEdgeToEdge()
 
         checkAndRequestPermissions()
 
@@ -264,6 +267,8 @@ fun MainAppScreen(
     val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsState()
 
     var currentTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
+        val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+        val hapticsTick = { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
     var showFullPlayer by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
@@ -323,7 +328,7 @@ fun MainAppScreen(
                 ) {
                     NavigationBarItem(
                         selected = currentTab == 0,
-                        onClick = { currentTab = 0 },
+                        onClick = { hapticsTick(); currentTab = 0 },
                         icon = { Icon(imageVector = Icons.Default.LibraryMusic, contentDescription = "Tracks", modifier = Modifier.size(22.dp)) },
                         label = { Text("Tracks", fontSize = 11.sp, fontWeight = if (currentTab == 0) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
@@ -337,7 +342,7 @@ fun MainAppScreen(
 
                     NavigationBarItem(
                         selected = currentTab == 1,
-                        onClick = { currentTab = 1 },
+                        onClick = { hapticsTick(); currentTab = 1 },
                         icon = { Icon(imageVector = Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = "Playlists", modifier = Modifier.size(22.dp)) },
                         label = { Text("Playlists", fontSize = 11.sp, fontWeight = if (currentTab == 1) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
@@ -351,7 +356,7 @@ fun MainAppScreen(
 
                     NavigationBarItem(
                         selected = currentTab == 2,
-                        onClick = { currentTab = 2 },
+                        onClick = { hapticsTick(); currentTab = 2 },
                         icon = { Icon(imageVector = Icons.Default.Favorite, contentDescription = "Favorites", modifier = Modifier.size(22.dp)) },
                         label = { Text("Favorites", fontSize = 11.sp, fontWeight = if (currentTab == 2) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
@@ -365,7 +370,7 @@ fun MainAppScreen(
 
                     NavigationBarItem(
                         selected = currentTab == 3,
-                        onClick = { currentTab = 3 },
+                        onClick = { hapticsTick(); currentTab = 3 },
                         icon = { Icon(imageVector = Icons.Default.CloudDownload, contentDescription = "Online YT", modifier = Modifier.size(22.dp)) },
                         label = { Text("Online", fontSize = 11.sp, fontWeight = if (currentTab == 3) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
@@ -379,7 +384,7 @@ fun MainAppScreen(
 
                     NavigationBarItem(
                         selected = currentTab == 4,
-                        onClick = { currentTab = 4 },
+                        onClick = { hapticsTick(); currentTab = 4 },
                         icon = { Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(22.dp)) },
                         label = { Text("Settings", fontSize = 11.sp, fontWeight = if (currentTab == 4) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(

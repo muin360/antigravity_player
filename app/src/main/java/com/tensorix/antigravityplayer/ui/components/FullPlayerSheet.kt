@@ -2,6 +2,13 @@ package com.tensorix.antigravityplayer.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -221,14 +228,14 @@ fun FullPlayerSheet(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 val hiResPrefix = when {
-                                    song.sampleRate >= 352800 -> "✦ 384kHz DXD MASTER"
-                                    song.sampleRate >= 176400 -> "✦ 192kHz STUDIO MASTER"
-                                    song.sampleRate >= 88200 -> "✦ 96kHz HI-RES AUDIO"
-                                    isHiRes -> "✦ HI-RES"
+                                    song.sampleRate >= 352800 -> "âœ¦ 384kHz DXD MASTER"
+                                    song.sampleRate >= 176400 -> "âœ¦ 192kHz STUDIO MASTER"
+                                    song.sampleRate >= 88200 -> "âœ¦ 96kHz HI-RES AUDIO"
+                                    isHiRes -> "âœ¦ HI-RES"
                                     else -> ""
                                 }
                                 Text(
-                                    text = if (hiResPrefix.isNotEmpty()) "$hiResPrefix  ${badgeParts.joinToString(" · ")}" else badgeParts.joinToString(" · "),
+                                    text = if (hiResPrefix.isNotEmpty()) "$hiResPrefix  ${badgeParts.joinToString(" Â· ")}" else badgeParts.joinToString(" Â· "),
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
                                         letterSpacing = 0.8.sp,
@@ -240,12 +247,31 @@ fun FullPlayerSheet(
                         }
                     }
                 }
-                IconButton(onClick = { onFavoriteToggle(song) }) {
+                // Favorite heart with bounce micro-interaction + haptic tick
+                val favPress = rememberPressInteraction()
+                val favHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+                val heartScale by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (song.isFavorite) 1.12f else 1f,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                        stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
+                    ),
+                    label = "heartBounce"
+                )
+                IconButton(
+                    onClick = {
+                        favHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onFavoriteToggle(song)
+                    },
+                    interactionSource = favPress
+                ) {
                     Icon(
                         imageVector = if (song.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite",
-                        tint = if (song.isFavorite) PrimaryCyan else TextSecondary,
-                        modifier = Modifier.size(28.dp)
+                        tint = if (song.isFavorite) AccentPink else TextSecondary,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .scale(heartScale)
                     )
                 }
             }
@@ -275,9 +301,9 @@ fun FullPlayerSheet(
                 },
                 valueRange = 0f..maxRange,
                 colors = SliderDefaults.colors(
-                    thumbColor = PrimaryCyan,
+                    thumbColor = Color.White,
                     activeTrackColor = PrimaryCyan,
-                    inactiveTrackColor = SurfaceDark
+                    inactiveTrackColor = Color(0x22FFFFFF),
                 )
             )
 
@@ -324,26 +350,47 @@ fun FullPlayerSheet(
                     )
                 }
 
-                // Play / Pause Button
+                // Play / Pause Button â€” gradient, glow shadow, animated icon
+                // morph, press bounce and haptic tick (premium transport).
+                val playPress = rememberPressInteraction()
+                val playHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(68.dp)
+                        .shadow(
+                            elevation = 16.dp,
+                            shape = CircleShape,
+                            spotColor = PrimaryCyan.copy(alpha = 0.45f)
+                        )
                         .clip(CircleShape)
                         .background(
-                            brush = Brush.horizontalGradient(
+                            brush = Brush.linearGradient(
                                 colors = listOf(PrimaryCyan, SecondaryViolet)
                             )
-                        ),
+                        )
+                        .clickable(interactionSource = playPress, indication = null) {
+                            playHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            onPlayPauseClick()
+                        }
+                        .pressScale(playPress, pressedScale = 0.90f, hapticOnPress = false),
                     contentAlignment = Alignment.Center
                 ) {
-                    IconButton(onClick = onPlayPauseClick, modifier = Modifier.fillMaxSize()) {
+                    AnimatedContent(
+                        targetState = isPlaying,
+                        transitionSpec = {
+                            (scaleIn(initialScale = 0.6f) + fadeIn()) togetherWith
+                                (scaleOut(targetScale = 0.6f) + fadeOut())
+                        },
+                        label = "fpPlayPauseMorph"
+                    ) { playing ->
                         Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (playing) "Pause" else "Play",
                             tint = Color.Black,
                             modifier = Modifier.size(36.dp)
                         )
                     }
+                }
                 }
 
                 // Next
@@ -393,4 +440,3 @@ fun FullPlayerSheet(
             }
         }
     }
-}

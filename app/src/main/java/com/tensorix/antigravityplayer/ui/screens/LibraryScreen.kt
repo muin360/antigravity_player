@@ -34,6 +34,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -202,14 +206,77 @@ fun LibraryScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         // Song List
-        if (songs.isEmpty() && !isScanning) {
+        if (songs.isEmpty() && isScanning) {
+            // Premium scanning skeleton: pulsing placeholder rows.
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(8) {
+                    val pulse = remember { androidx.compose.animation.core.Animatable(0.35f) }
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            pulse.animateTo(
+                                0.7f,
+                                androidx.compose.animation.core.tween(700)
+                            )
+                            pulse.animateTo(
+                                0.35f,
+                                androidx.compose.animation.core.tween(700)
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                            .height(64.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(SurfaceDark.copy(alpha = pulse.value))
+                    ) {
+                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(TextSecondary.copy(alpha = 0.12f))
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Box(
+                                    modifier = Modifier
+                                        .width(160.dp)
+                                        .height(13.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(TextSecondary.copy(alpha = 0.15f))
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .width(96.dp)
+                                        .height(10.dp)
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(TextSecondary.copy(alpha = 0.10f))
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (songs.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("No local music found", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Icon(
+                        imageVector = Icons.Default.MusicNote,
+                        contentDescription = null,
+                        tint = PrimaryCyan.copy(alpha = 0.7f),
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Your library is empty", style = MaterialTheme.typography.titleMedium, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Scan your storage to find your music", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = onScanLibrary, colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan)) {
                         Text("Scan Storage", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
