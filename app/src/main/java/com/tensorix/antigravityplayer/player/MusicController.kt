@@ -33,6 +33,11 @@ class MusicController(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var progressJob: Job? = null
 
+    // Seek snap-back guard: Media3 reports the OLD position for a short
+    // window after seekTo; suppress tracker writes so the UI never jumps back.
+    @Volatile
+    private var lastSeekRequestMs: Long = 0L
+
     private var pendingPlayAction: (() -> Unit)? = null
 
     private val _currentSong = MutableStateFlow<Song?>(null)
@@ -217,7 +222,10 @@ class MusicController(private val context: Context) {
         progressJob = scope.launch {
             while (isActive) {
                 mediaController?.let { controller ->
-                    _currentPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+                    val seekSettle = android.os.SystemClock.elapsedRealtime() - lastSeekRequestMs < 700L
+                    if (!seekSettle) {
+                        _currentPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+                    }
                     _durationMs.value = controller.duration.coerceAtLeast(0L)
                 }
                 delay(200)
@@ -440,6 +448,7 @@ class MusicController(private val context: Context) {
 
     fun seekTo(positionMs: Long) {
         runCatching { Log.i("SEEK", "User requested seekTo(positionMs=$positionMs)") }
+        lastSeekRequestMs = android.os.SystemClock.elapsedRealtime()
         _currentPositionMs.value = positionMs
         mediaController?.seekTo(positionMs)
     }

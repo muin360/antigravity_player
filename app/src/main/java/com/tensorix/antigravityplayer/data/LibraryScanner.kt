@@ -32,7 +32,8 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
             MediaStore.Audio.Media.DATA,
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.MIME_TYPE
+            MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.Audio.Media.DATE_ADDED
         )
 
         val selection = "(${MediaStore.Audio.Media.IS_MUSIC} != 0 OR ${MediaStore.Audio.Media.MIME_TYPE} LIKE 'audio/%') AND ${MediaStore.Audio.Media.DURATION} >= 3000 AND (${MediaStore.Audio.Media.IS_RINGTONE} = 0 AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0 AND ${MediaStore.Audio.Media.IS_ALARM} = 0)"
@@ -63,6 +64,7 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
             val albumIdCol = c.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID)
             val sizeCol = c.getColumnIndex(MediaStore.Audio.Media.SIZE)
             val mimeCol = c.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+            val dateAddedCol = c.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
 
             while (c.moveToNext()) {
                 val mediaId = if (idCol >= 0) c.getLong(idCol) else System.currentTimeMillis()
@@ -74,6 +76,9 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                 val albumId = if (albumIdCol >= 0) c.getLong(albumIdCol) else -1L
                 val fileSize = if (sizeCol >= 0) c.getLong(sizeCol) else 0L
                 val mimeType = if (mimeCol >= 0) c.getString(mimeCol) ?: "" else ""
+                // DATE_ADDED is in SECONDS; Song expects millis. Fixes the
+                // previously-meaningless DATE_ADDED sort.
+                val dateAddedMs = if (dateAddedCol >= 0) c.getLong(dateAddedCol) * 1000L else 0L
 
                 val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId).toString()
                 val playUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -152,6 +157,7 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                     albumArtUri = albumArtUri,
                     source = "local",
                     isFavorite = isFav,
+                    dateAdded = if (dateAddedMs > 0) dateAddedMs else existing?.dateAdded ?: System.currentTimeMillis(),
                     lastScanned = scanStartTimestamp,
                     bitrate = resolvedBitrate,
                     sampleRate = resolvedSampleRate,

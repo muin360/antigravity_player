@@ -30,7 +30,6 @@ class EqualizerEngine(private val context: Context) {
     private var bassBoost: BassBoost? = null
     private var virtualizer: Virtualizer? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
-    private var presetReverb: android.media.audiofx.PresetReverb? = null
 
     private var currentAudioSessionId: Int = 0
 
@@ -60,20 +59,11 @@ class EqualizerEngine(private val context: Context) {
     private val _bassBoostStrength = MutableStateFlow<Short>(prefs.getInt("bass_boost", 0).toShort())
     val bassBoostStrength: StateFlow<Short> = _bassBoostStrength.asStateFlow()
 
-    private val _virtualizerStrength = MutableStateFlow<Short>(prefs.getInt("virtualizer", 0).toShort())
-    val virtualizerStrength: StateFlow<Short> = _virtualizerStrength.asStateFlow()
-
     private val _trebleStrength = MutableStateFlow<Short>(prefs.getInt("treble_strength", 0).toShort())
     val trebleStrength: StateFlow<Short> = _trebleStrength.asStateFlow()
 
-    private val _reverbPreset = MutableStateFlow<Short>(prefs.getInt("reverb_preset", 0).toShort())
-    val reverbPreset: StateFlow<Short> = _reverbPreset.asStateFlow()
-
     private val _replayGainEnabled = MutableStateFlow(prefs.getBoolean("replay_gain_enabled", true))
     val replayGainEnabled: StateFlow<Boolean> = _replayGainEnabled.asStateFlow()
-
-    private val _loudnessGain = MutableStateFlow<Int>(prefs.getInt("loudness_gain", 0)) // mB
-    val loudnessGain: StateFlow<Int> = _loudnessGain.asStateFlow()
 
     private val _preAmpGainDb = MutableStateFlow<Float>(prefs.getFloat("pre_amp_db", 0.0f))
     val preAmpGainDb: StateFlow<Float> = _preAmpGainDb.asStateFlow()
@@ -197,71 +187,10 @@ class EqualizerEngine(private val context: Context) {
         release() // Detach previous session effects
         currentAudioSessionId = audioSessionId
 
-        // AUDIOPHILE LOGIC: If we have a 64-bit DSP processor enabled, 
-        // we BYPASS the native Android effects to ensure 100% signal purity and zero phase smearing.
-        if (_isBitPerfectBypass.value || (dspProcessor?.isEnabled == true)) {
-            Log.i("EqualizerEngine", "64-bit DSP Active: Native AudioEffects Detached for Purity")
-            return
-        }
-
-        try {
-            val eq = Equalizer(0, audioSessionId)
-            equalizer = eq
-            eq.enabled = _isEnabled.value
-
-            val numBands = runCatching { eq.numberOfBands.toInt() }.getOrDefault(5)
-            val range = runCatching { eq.bandLevelRange }.getOrNull()
-            if (range != null && range.size >= 2) {
-                _minBandLevel.value = range[0]
-                _maxBandLevel.value = range[1]
-            }
-
-            val levels = _bandLevels.value.toMutableList()
-            for (i in 0 until numBands) {
-                val savedLevel = prefs.getInt("band_$i", 0).toShort()
-                runCatching { eq.setBandLevel(i.toShort(), savedLevel) }
-                if (i < levels.size) levels[i] = savedLevel
-            }
-            _bandLevels.value = levels
-            syncWithDsp()
-
-            // Bass Boost
-            try {
-                val bb = BassBoost(0, audioSessionId)
-                bassBoost = bb
-                bb.enabled = _isEnabled.value
-                if (runCatching { bb.strengthSupported }.getOrDefault(false)) {
-                    bb.setStrength(_bassBoostStrength.value)
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-            }
-
-            // Virtualizer
-            try {
-                val virt = Virtualizer(0, audioSessionId)
-                virtualizer = virt
-                virt.enabled = _isEnabled.value
-                if (runCatching { virt.strengthSupported }.getOrDefault(false)) {
-                    virt.setStrength(_virtualizerStrength.value)
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-            }
-
-            // Loudness Enhancer
-            try {
-                val le = LoudnessEnhancer(audioSessionId)
-                loudnessEnhancer = le
-                le.enabled = _isEnabled.value
-                le.setTargetGain(_loudnessGain.value)
-            } catch (e: Exception) {
-                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-            }
-
-        } catch (e: Exception) {
-            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-        }
+        // Framework AudioEffect path is PERMANENTLY DETACHED: the 64-bit DSP
+        // (native or JVM fallback) always owns processing, so no Equalizer/
+        // BassBoost/Virtualizer/Loudness object is ever created here. This
+        // method remains for session bookkeeping only.
     }
 
     fun setDspProcessor(processor: Audiophile64BitDspProcessor) {
@@ -367,16 +296,6 @@ class EqualizerEngine(private val context: Context) {
 
         prefs.edit().putInt("band_$band", level.toInt()).apply()
         syncWithDsp()
-
-        equalizer?.let { eq ->
-            try {
-                if (band < eq.numberOfBands) {
-                    eq.setBandLevel(band, level)
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-            }
-        }
     }
 
     fun setBassBoost(strength: Short) {
@@ -396,30 +315,13 @@ class EqualizerEngine(private val context: Context) {
         prefs.edit().putInt("bass_boost", safeStrength.toInt()).apply()
     }
 
-    fun setVirtualizer(strength: Short) {
-        val safeStrength = strength.coerceIn(0, 1000)
-        _virtualizerStrength.value = safeStrength
-        try {
-            virtualizer?.let {
-                if (runCatching { it.strengthSupported }.getOrDefault(false)) {
-                    it.setStrength(safeStrength)
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-        }
-        prefs.edit().putInt("virtualizer", safeStrength.toInt()).apply()
-    }
+    /** INERT: framework Virtualizer never attaches while the DSP owns the chain.
+    *  Kept as a no-op for API compatibility. */
+    fun setVirtualizer(strength: Short) { /* intentionally inert */ }
 
-    fun setLoudnessGain(gainmB: Int) {
-        _loudnessGain.value = gainmB
-        try {
-            loudnessEnhancer?.setTargetGain(gainmB)
-        } catch (e: Exception) {
-            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-        }
-        prefs.edit().putInt("loudness_gain", gainmB).apply()
-    }
+    /** INERT: framework LoudnessEnhancer never attaches while the DSP owns
+    *  the chain. Kept as a no-op for API compatibility. */
+    fun setLoudnessGain(gainmB: Int) { /* intentionally inert */ }
 
     fun setPreAmpGain(gainDb: Float) {
         _preAmpGainDb.value = gainDb
@@ -503,20 +405,11 @@ class EqualizerEngine(private val context: Context) {
         _trebleStrength.value = strength
         dspProcessor?.trebleGainDb = (strength.toDouble() / 1500.0) * 15.0
         syncWithDsp()
-        equalizer?.let { eq ->
-            val lastBand = (_bandCount.value - 1).toShort()
-            if (lastBand >= 0) {
-                runCatching { eq.setBandLevel(lastBand, strength) }
-            }
-        }
         prefs.edit().putInt("treble_strength", strength.toInt()).apply()
     }
 
-    fun setReverbPreset(preset: Short) {
-        _reverbPreset.value = preset
-        runCatching { presetReverb?.preset = preset }
-        prefs.edit().putInt("reverb_preset", preset.toInt()).apply()
-    }
+    /** INERT: PresetReverb was never instantiated. No-op for API compat. */
+    fun setReverbPreset(preset: Short) { /* intentionally inert */ }
 
     fun applyPreset(preset: EqPreset) {
         _currentPresetName.value = preset.name
@@ -527,11 +420,6 @@ class EqualizerEngine(private val context: Context) {
             if (index < newLevels.size) {
                 newLevels[index] = level.toShort()
                 dspProcessor?.setBandGain(index, level.toDouble() / 100.0)
-                equalizer?.let { eq ->
-                    if (index < eq.numberOfBands) {
-                        runCatching { eq.setBandLevel(index.toShort(), level.toShort()) }
-                    }
-                }
                 prefs.edit().putInt("band_$index", level.toInt()).apply()
             }
         }
@@ -632,11 +520,9 @@ class EqualizerEngine(private val context: Context) {
         runCatching { bassBoost?.release() }
         runCatching { virtualizer?.release() }
         runCatching { loudnessEnhancer?.release() }
-        runCatching { presetReverb?.release() }
         equalizer = null
         bassBoost = null
         virtualizer = null
         loudnessEnhancer = null
-        presetReverb = null
     }
 }

@@ -52,6 +52,7 @@ class OboeAudioSink(
     private val context: Context,
     private val dspProcessor: Audiophile64BitDspProcessor? = null,
     private var bitPerfectMode: Boolean = false,
+    sampleRateMatchingInitial: Boolean = true,
     private val onExclusiveModeChanged: (Boolean) -> Unit = {}
 ) : AudioSink {
 
@@ -127,6 +128,15 @@ class OboeAudioSink(
     // subsequent traffic routes to DefaultAudioSink until reset().
     @Volatile
     private var nativeUnsupported: Boolean = false
+
+    /**
+     * P0 dead-control fix: this flag is now LIVE. ON = open the device stream
+     * at the SOURCE (track) sample rate. OFF = open at a fixed 48 kHz and let
+     * the resampler own all conversion. Persisted + toggled from Settings and
+     * the Audiophile screen; changing it re-opens a live stream.
+     */
+    @Volatile
+    private var sampleRateMatchingEnabled: Boolean = sampleRateMatchingInitial
 
     // Fallback sink ONLY used if native Oboe library is missing or the device
     // fails the native open.
@@ -701,6 +711,26 @@ class OboeAudioSink(
         }
     }
 
+
+    /**
+     * LIVE control (dead-toggle fix): ON opens streams at the track rate;
+     * OFF pins the device stream to 48 kHz and lets the resampler convert.
+     * Re-open is serialized through the lifecycle lock; an in-flight
+     * lock-free write fails safely on the stale generation.
+     */
+    fun setSampleRateMatching(enabled: Boolean) {
+        if (sampleRateMatchingEnabled == enabled) return
+        sampleRateMatchingEnabled = enabled
+        synchronized(lifecycleLock) {
+            if (streamHandle != 0L) {
+                closeOboeStreamLocked()
+                openOboeStreamLocked(preferredDevice?.id ?: 0)
+                if (streamHandle != 0L && isPlaying) {
+                    OboeBridge.startStream(streamHandle)
+                }
+            }
+        }
+    }
     fun setBitPerfectMode(enabled: Boolean) {
         synchronized(lifecycleLock) {
             if (this.bitPerfectMode != enabled) {
@@ -720,7 +750,9 @@ class OboeAudioSink(
     private fun openOboeStreamLocked(deviceId: Int = 0) {
         if (!OboeBridge.isAvailable || streamHandle != 0L) return
         val targetDevice = if (deviceId > 0) deviceId else (preferredDevice?.id ?: 0)
-        val handle = OboeBridge.openStream(sampleRate, channelCount, bitPerfectMode, targetDevice)
+        // Sample-Rate Matching (now LIVE): OFF pins device stream to 48 kHz.
+        val openRate = if (sampleRateMatchingEnabled) sampleRate else 48000
+        val handle = OboeBridge.openStream(openRate, channelCount, bitPerfectMode, targetDevice)
         if (handle == 0L) return
 
         streamHandle = handle

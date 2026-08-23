@@ -1,45 +1,53 @@
-# Antigravity Player 🎵
+# Antigravity Player
 
-Voice-enabled, AI-integrated, Hi-Fi Android music player.
+Voice-ready, Hi-Fi-focused local music player for Android.
+Kotlin + Jetpack Compose · Media3/ExoPlayer · custom Oboe/AAudio native engine (C++).
 
 ## Structure
 
 ```
-AntigravityPlayer/
-├── app/                     -> Android app module (Kotlin + Jetpack Compose)
-│   └── src/main/
-│       ├── java/com/tensorix/antigravityplayer/
-│       │   ├── player/      -> ExoPlayer engine, EQ/DSP, MediaSession
-│       │   ├── data/        -> Room DB, repositories, models
-│       │   ├── ui/          -> Jetpack Compose screens
-│       │   ├── voice/       -> SpeechRecognizer, intent parsing
-│       │   ├── ai/          -> BYOK LLM orchestrator (Gemini/OpenAI/Claude)
-│       │   └── util/        -> helpers, extensions
-│       └── res/             -> layouts, drawables, values
-├── backend/                 -> Node.js YT extraction server (Phase 3)
-├── docs/                    -> Project plan, architecture notes
-├── build.gradle.kts
-├── settings.gradle.kts
-└── .gitignore
+app/src/main/java/com/tensorix/antigravityplayer/
+├── player/    ExoPlayer service, MediaController, EQ engine
+├── audio/     Oboe sink, JNI bridge, DSP processors, verifiers
+├── data/      Room DB, repositories, library scanner
+├── ui/        Compose screens & components
+├── voice/     On-device speech recognition
+└── util/      LRC parser, crash diagnostics
+backend/       Optional LAN YouTube-extraction service (Phase 3)
+docs/          Forensic audit & validation reports
 ```
 
-## Phase Status
-- [x] Phase 1 — Core Music Player (Completed)
-- [x] Phase 2 — Hi-Fi Audio + Equalizer (Completed)
-- [ ] Phase 3 — YouTube Backend
-- [ ] Phase 4 — Voice + AI (BYOK)
-- [ ] Phase 5 — Polish
+## Audio architecture (short version)
 
-See `music-player-plan.md` for the full master plan.
+- **Native path:** Media3 → `OboeAudioSink` → lock-free ring → Oboe/AAudio (Float).
+  64-bit double DSP with seqlock parameter transport; explicit frame-domain
+  accounting for pending data and position clocks.
+- **Fallback:** pre-configured `DefaultAudioSink` + JVM mirror of the DSP chain —
+  engaged automatically on unsupported formats or stream failure. Normal playback
+  never depends on vendor/OEM code.
+- **Truth rules:** BitPerfect requires verified direct evidence; SHARED output is
+  never labeled DIRECT; unmatched device IDs stay UNKNOWN. See
+  `docs/p0-playback-core-final-report.md`, `docs/forensic-truth-audit.md`,
+  `docs/DSPOwnership.md`.
 
-## How to Test in Android Studio
-1. Open **Android Studio**.
-2. Click **Open** (or `File -> Open`) and select the project folder: `c:\Code\AntigravityPlayer\AntigravityPlayer`.
-3. Android Studio will detect Gradle configuration, sync dependencies, and index the Kotlin/Compose sources.
-4. Select an Android Emulator or connected physical device (API 26+).
-5. Click the green **Run 'app'** button (or press `Shift + F10`).
+## Build & test
 
-## Notes
-- Backend (`/backend`) is separate — run `npm start` inside `backend/` for Phase 3 API services.
-- API keys (Gemini/OpenAI/Claude) are BYOK — stored securely via Android Keystore at runtime.
+```
+./gradlew :app:assembleDebug          # debug APK
+./gradlew :app:assembleRelease        # R8-minified (unsigned)
+./gradlew :app:testDebugUnitTest      # JVM unit tests
+```
 
+Requires Android Studio SDK 34, NDK, CMake. minSdk 27.
+
+## Status
+
+- Playback core P0s implemented (seek/flush legality, route truth, lock-free write).
+- Real-device matrix: see `docs/p0-playback-core-validation.md`.
+- Hi-Fi / OEM activation: intentionally deferred until the device matrix is green.
+
+## Backend (optional)
+
+`backend/` is a LAN-only dev tool (`npm start`). Production clients require an
+HTTPS endpoint configured in-app; cleartext is limited to emulator/dev hosts by
+the network security config.

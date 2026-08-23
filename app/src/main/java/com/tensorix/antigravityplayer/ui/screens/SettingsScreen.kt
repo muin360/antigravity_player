@@ -218,8 +218,8 @@ fun SettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("64-bit Turbo Processing", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                    Text("Ultra-high precision DSP math & dithering", color = TextSecondary, fontSize = 10.sp)
+                                    Text("Sample Rate Matching", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Text("Open the device stream at the track's native rate; resampler owns conversion when off", color = TextSecondary, fontSize = 10.sp)
                                 }
                                 Switch(
                                     checked = isTurboMode,

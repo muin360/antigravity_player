@@ -301,7 +301,8 @@ class PlaybackService : MediaSessionService() {
                             val sink = com.tensorix.antigravityplayer.audio.OboeAudioSink(
                                 context = context,
                                 dspProcessor = dspProcessor,
-                                bitPerfectMode = isBitPerfect
+                                bitPerfectMode = isBitPerfect,
+                                sampleRateMatchingInitial = _sampleRateMatching.value
                             )
                             activeOboeAudioSink = sink
                             return sink
@@ -617,6 +618,7 @@ class PlaybackService : MediaSessionService() {
 
     fun setSampleRateMatching(enabled: Boolean) {
         _sampleRateMatching.value = enabled
+        activeOboeAudioSink?.setSampleRateMatching(enabled)
         audioPrefs.edit().putBoolean("sample_rate_matching", enabled).apply()
         Log.i("HiFiPlayer", "Sample Rate Matching changed: $enabled")
         AudioEngine.invalidate()

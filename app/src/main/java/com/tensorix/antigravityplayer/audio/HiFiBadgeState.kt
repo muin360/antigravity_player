@@ -4,6 +4,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Badge truth rules (principle 13/16):
+ *  - "BIT-PERFECT" only from VERIFIED evidence.
+ *  - "DIRECT" only when an exclusive path is actually active-unverified.
+ *  - Everything else is a descriptive format/route label, never a hardware
+ *    capability claim. UNKNOWN stays UNKNOWN.
+ */
 object HiFiBadgeState {
     private val _isHiFiActive = MutableStateFlow(false)
     val isHiFiActive: StateFlow<Boolean> = _isHiFiActive.asStateFlow()
@@ -15,34 +22,22 @@ object HiFiBadgeState {
     val hifiDetail: StateFlow<String> = _hifiDetail.asStateFlow()
 
     fun updateFromSnapshot(snapshot: CanonicalAudioRuntimeSnapshot) {
-        _isHiFiActive.value = snapshot.bitPerfect.state == BitPerfectState.VERIFIED ||
-                snapshot.bitPerfect.state == BitPerfectState.ACTIVE_UNVERIFIED ||
-                snapshot.bitPerfect.state == BitPerfectState.ELIGIBLE
+        val state = snapshot.bitPerfect.state
+        _isHiFiActive.value = state == BitPerfectState.VERIFIED ||
+                state == BitPerfectState.ACTIVE_UNVERIFIED
 
-        _hifiLabel.value = when (snapshot.bitPerfect.state) {
+        _hifiLabel.value = when (state) {
             BitPerfectState.VERIFIED -> "BIT-PERFECT"
             BitPerfectState.ACTIVE_UNVERIFIED -> "DIRECT"
             BitPerfectState.ELIGIBLE -> "HI-RES"
             else -> if (snapshot.actualOutput.sampleRate.value >= 88200) "HD" else "HI-FI"
         }
 
-        _hifiDetail.value = when (snapshot.bitPerfect.state) {
+        _hifiDetail.value = when (state) {
             BitPerfectState.VERIFIED -> "Verified Direct Path"
-            BitPerfectState.ACTIVE_UNVERIFIED -> "Exclusive Mode"
-            BitPerfectState.ELIGIBLE -> "DSP Engine Active"
+            BitPerfectState.ACTIVE_UNVERIFIED -> "Exclusive Mode (unverified)"
+            BitPerfectState.ELIGIBLE -> "Direct-capable route"
             else -> snapshot.activeRoute.value.displayName
         }
-    }
-
-    fun updateExclusive(exclusive: Boolean) {
-        _isHiFiActive.value = true
-        _hifiLabel.value = if (exclusive) "HI-FI" else "HD"
-        _hifiDetail.value = if (exclusive) "Direct DAC" else "Oboe Mixed"
-    }
-
-    fun updateOboeMode(exclusive: Boolean) {
-        _isHiFiActive.value = true
-        _hifiLabel.value = if (exclusive) "HI-FI" else "HD"
-        _hifiDetail.value = if (exclusive) "Direct DAC" else "Oboe Mixed"
     }
 }

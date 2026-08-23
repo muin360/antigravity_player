@@ -57,7 +57,8 @@ fun SongInfoDialog(
     } else "44.1 kHz (CD Quality)"
 
     val bitDepthDisplay = when {
-        song.format in listOf("FLAC", "WAV", "ALAC", "DSD", "AIFF") -> "24-bit / 32-bit Float"
+        song.format == "DSD" -> "1-bit DSD (rendered via PCM)"
+        song.format in listOf("FLAC", "WAV", "ALAC", "AIFF") -> "24-bit / 32-bit Float"
         song.sampleRate >= 88200 -> "24-bit Studio Master"
         else -> "16-bit Lossless"
     }

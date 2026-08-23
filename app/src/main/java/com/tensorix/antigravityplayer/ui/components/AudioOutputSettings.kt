@@ -133,72 +133,11 @@ fun OutputCategoryCard(
             if (expanded) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = Color.White.copy(alpha = 0.1f))
 
-                // API Selection
-                Text("OUTPUT METHOD (API)", style = MaterialTheme.typography.labelSmall, color = PrimaryCyan)
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                AudioOutputApi.entries.forEach { api ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = config.api == api,
-                            onClick = {
-                                val newConfig = config.copy(api = api)
-                                config = newConfig
-                                configManager.saveConfigForDevice(routeType, newConfig)
-                                onConfigChange()
-                            },
-                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryCyan)
-                        )
-                        Text(api.label, color = TextPrimary, fontSize = 13.sp)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Bit Depth
-                Text("BIT DEPTH", style = MaterialTheme.typography.labelSmall, color = PrimaryCyan)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(16, 24, 32).forEach { depth ->
-                        FilterChip(
-                            selected = config.bitDepth == depth,
-                            onClick = {
-                                val newConfig = config.copy(bitDepth = depth)
-                                config = newConfig
-                                configManager.saveConfigForDevice(routeType, newConfig)
-                                onConfigChange()
-                            },
-                            label = { Text("$depth-bit") },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PrimaryCyan, selectedLabelColor = Color.Black)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Exclusive Mode
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Exclusive Mode", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("Direct hardware access (Bypasses system mixer)", color = TextSecondary, fontSize = 11.sp)
-                    }
-                    Switch(
-                        checked = config.exclusiveMode,
-                        onCheckedChange = {
-                            val newConfig = config.copy(exclusiveMode = it)
-                            config = newConfig
-                            configManager.saveConfigForDevice(routeType, newConfig)
-                            onConfigChange()
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = PrimaryCyan)
-                    )
-                }
+                // TRUTH SCOPE (audit §0-e): these engine presets affect the
+                // SYSTEM-FALLBACK output engine. The active low-latency Oboe
+                // path negotiates rate/format directly with the device, so
+                // per-route API/bit-depth/exclusive controls would be dead
+                // knobs and are intentionally not shown.
             }
         }
     }
