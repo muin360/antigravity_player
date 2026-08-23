@@ -282,6 +282,13 @@ class EqualizerEngine(private val context: Context) {
                 com.tensorix.antigravityplayer.audio.OboeBridge.setClarityEnhancerGain(handle, _clarityGain.value.toDouble())
                 com.tensorix.antigravityplayer.audio.OboeBridge.setStereoExpansionMultiplier(handle, _stereoExpansion.value.toDouble())
                 com.tensorix.antigravityplayer.audio.OboeBridge.setWarmSaturationLevel(handle, _warmSaturation.value.toDouble())
+                // Full parity with OboeAudioSink.syncDspParameters: these were
+                // previously missing from the live path (only applied at next
+                // stream open).
+                com.tensorix.antigravityplayer.audio.OboeBridge.setTriodeWarmthLevel(handle, _warmSaturation.value.toDouble())
+                com.tensorix.antigravityplayer.audio.OboeBridge.setPentodeTapeLevel(handle, dspProcessor?.pentodeTapeLevel ?: 0.0)
+                com.tensorix.antigravityplayer.audio.OboeBridge.setDitherStrength(handle, if (_isBitPerfectBypass.value) 0.0 else dspProcessor?.ditherStrength ?: 0.0)
+                com.tensorix.antigravityplayer.audio.OboeBridge.setOutputBitDepth(handle, dspProcessor?.outputBitDepth ?: 24)
                 com.tensorix.antigravityplayer.audio.OboeBridge.setAirPresenceGainDb(handle, _airPresence.value.toDouble())
                 com.tensorix.antigravityplayer.audio.OboeBridge.setCrossfeedLevel(handle, _crossfeedLevel.value.toDouble())
                 com.tensorix.antigravityplayer.audio.OboeBridge.setLimiterEnabled(handle, _isTurboSharpness.value)

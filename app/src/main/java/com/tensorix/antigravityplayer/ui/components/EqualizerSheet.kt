@@ -92,9 +92,7 @@ fun EqualizerSheet(
     val maxLevel by equalizerEngine.maxBandLevel.collectAsState()
 
     val bassBoost by equalizerEngine.bassBoostStrength.collectAsState()
-    val virtualizer by equalizerEngine.virtualizerStrength.collectAsState()
-    val loudnessGain by equalizerEngine.loudnessGain.collectAsState()
-    val preAmpGain by equalizerEngine.preAmpGainDb.collectAsState()
+            val preAmpGain by equalizerEngine.preAmpGainDb.collectAsState()
     val clarityGain by equalizerEngine.clarityGain.collectAsState()
     val airPresence by equalizerEngine.airPresence.collectAsState()
     val isTurboSharpness by equalizerEngine.isTurboSharpness.collectAsState()
@@ -374,7 +372,7 @@ fun EqualizerSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // DSP Controls: Bass Boost & Virtualizer & Loudness
+            // DSP Controls (all controls below are LIVE on the active audio path)
             Text(text = "DSP & AUDIO EFFECTS", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -421,24 +419,12 @@ fun EqualizerSheet(
                     colors = SliderDefaults.colors(thumbColor = PrimaryCyan, activeTrackColor = PrimaryCyan)
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Virtualizer (3D Surround)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("3D Surround Virtualizer", color = TextPrimary, fontSize = 14.sp)
-                    Text("${(virtualizer / 10)}%", color = SecondaryViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-                Slider(
-                    value = virtualizer.toFloat(),
-                    onValueChange = { equalizerEngine.setVirtualizer(it.toInt().toShort()) },
-                    valueRange = 0f..1000f,
-                    enabled = isEnabled,
-                    colors = SliderDefaults.colors(thumbColor = SecondaryViolet, activeTrackColor = SecondaryViolet)
-                )
+                // NOTE: the old "3D Surround Virtualizer" and "Loudness"
+                // sliders were REMOVED (truth audit §0-d): they only drove
+                // framework AudioEffect objects that are permanently detached
+                // while the 64-bit DSP owns the chain, so they had zero effect
+                // on the actual audio path. Dead controls are worse than no
+                // controls.
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -614,25 +600,6 @@ fun EqualizerSheet(
                     colors = SliderDefaults.colors(thumbColor = SecondaryViolet, activeTrackColor = SecondaryViolet)
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Digital Gain Boost
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Digital Gain Boost", color = TextPrimary, fontSize = 14.sp)
-                    Text("${(loudnessGain / 100)} dB", color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-                Slider(
-                    value = loudnessGain.toFloat(),
-                    onValueChange = { equalizerEngine.setLoudnessGain(it.toInt()) },
-                    valueRange = 0f..1000f,
-                    enabled = isEnabled,
-                    colors = SliderDefaults.colors(thumbColor = PrimaryCyan, activeTrackColor = PrimaryCyan)
-                )
-
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // HRTF 3D Spatial Audio (Studio Room Monitor Emulation)
@@ -686,7 +653,7 @@ fun EqualizerSheet(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("64-bit Turbo Path", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text("Advanced dithering + 0.25 harmonic richness", color = TextSecondary, fontSize = 11.sp)
+                        Text("Harmonic richness + safety limiter", color = TextSecondary, fontSize = 11.sp)
                     }
                     Switch(
                         checked = isTurboSharpness,

@@ -1,6 +1,6 @@
 # P0 Playback Core Final Report
 
-**Date:** 2026-08-23 Ã‚Â· **Scope:** P0-1..P0-10 playback core only. Hi-Fi/OEM deferred.
+**Date:** 2026-08-23 ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· **Scope:** P0-1..P0-10 playback core only. Hi-Fi/OEM deferred.
 **Verification this session:** Kotlin+KSP compile, native builds (4 ABIs), R8 release,
 **80/80 JVM unit tests** (12 suites; incl. seek-state machine + SinkClockMath goldens).
 **Real-device matrix NOT run** (see p0-playback-core-validation.md).
@@ -12,19 +12,19 @@ vendor decoupling and route telemetry. Audited line-by-line against the prompt:
 
 | Their change | Verdict | Action taken |
 |---|---|---|
-| `shared_ptr<oboe::AudioStream>` migration (Phase 19) | Ã¢Å“â€¦ correct lifetime model, error-callback compare via `.get()` | kept |
-| Flush state-gate: requestPause Ã¢â€ â€™ `waitForStateChange(PausingÃ¢â€ â€™next,50ms)` Ã¢â€ â€™ flush only in Paused/Open/Stopped/Flushed Ã¢â€ â€™ else LOGW skip | Ã¢Å“â€¦ eliminates the AAudio "PAUSINGÃ¢â€ â€™flush" illegal-state error | kept |
-| **Flush no longer resumes the stream** | Ã¢ÂÅ’ **CRITICAL regression**: after an in-playback seek Media3 does not re-issue play(); stream stayed PAUSED Ã¢â€ â€™ audio disappears (the exact reported symptom) | **FIXED**: Kotlin sink issues `startStream` after successful native flush when `isPlaying`, in both `handleDiscontinuity()` and `flush()` |
-| Vendor probe removed from route-change + init coordinator (Phase 11) | Ã¢Å“â€¦ | kept; `prepareHardwareForDirectPlayback` call at player creation also removed Ã¢â‚¬â€ playback construction is now vendor-free end to end |
-| VivoAdapter: IllegalArgumentException caught, CrashDiagnostics spam removed (Phase 12) | Ã¢Å“â€¦ single debug log instead | kept |
-| SeekState machine IDLEÃ¢â€ â€™REQUESTEDÃ¢â€ â€™FLUSHINGÃ¢â€ â€™REANCHOREDÃ¢â€ â€™WRITINGÃ¢â€ â€™STABLE | Ã¢Å“â€¦ matches Ã‚Â§1.3 | kept; added SEEK_START/SEEK_END duration metrics |
-| ROUTE_TELEMETRY log on open | Ã¢Å“â€¦ contract fields present | extended with Phase-3 rate domains: sourceSampleRate / nativeSampleRate / resampler=ACTIVEÃ‚Â·PASSTHROUGH |
-| AudioOutputManager: opaque deviceId Ã¢â€ â€™ hardcoded type-bitmask map Ã¢â€ â€™ "single non-speaker" guess | Ã¢ÂÅ’ fabrication risk (principles 13/16): AAudio ids are opaque handles; guessing a lone wired device as active is exactly the forbidden inference | **FIXED**: strict id match only; anything else Ã¢â€ â€™ UNKNOWN propagates |
+| `shared_ptr<oboe::AudioStream>` migration (Phase 19) | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ correct lifetime model, error-callback compare via `.get()` | kept |
+| Flush state-gate: requestPause ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ `waitForStateChange(PausingÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢next,50ms)` ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ flush only in Paused/Open/Stopped/Flushed ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ else LOGW skip | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ eliminates the AAudio "PAUSINGÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢flush" illegal-state error | kept |
+| **Flush no longer resumes the stream** | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ **CRITICAL regression**: after an in-playback seek Media3 does not re-issue play(); stream stayed PAUSED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ audio disappears (the exact reported symptom) | **FIXED**: Kotlin sink issues `startStream` after successful native flush when `isPlaying`, in both `handleDiscontinuity()` and `flush()` |
+| Vendor probe removed from route-change + init coordinator (Phase 11) | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ | kept; `prepareHardwareForDirectPlayback` call at player creation also removed ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â playback construction is now vendor-free end to end |
+| VivoAdapter: IllegalArgumentException caught, CrashDiagnostics spam removed (Phase 12) | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ single debug log instead | kept |
+| SeekState machine IDLEÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢REQUESTEDÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢FLUSHINGÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢REANCHOREDÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢WRITINGÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢STABLE | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ matches ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§1.3 | kept; added SEEK_START/SEEK_END duration metrics |
+| ROUTE_TELEMETRY log on open | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ contract fields present | extended with Phase-3 rate domains: sourceSampleRate / nativeSampleRate / resampler=ACTIVEÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·PASSTHROUGH |
+| AudioOutputManager: opaque deviceId ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ hardcoded type-bitmask map ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ "single non-speaker" guess | ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ fabrication risk (principles 13/16): AAudio ids are opaque handles; guessing a lone wired device as active is exactly the forbidden inference | **FIXED**: strict id match only; anything else ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ UNKNOWN propagates |
 
 Rate-reconciliation note now encoded in code + telemetry: when SOURCE==NATIVE but
-AAudio logs a flowgraph conversion (44.1Ã¢â€ â€™48k), the conversion happens inside the
-HAL mixer Ã¢â‚¬â€ our resampler is PASSTHROUGH and BitPerfect stays UNAVAILABLE because
-the endpoint differs from source (Ã‚Â§3.2/3.3).
+AAudio logs a flowgraph conversion (44.1ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢48k), the conversion happens inside the
+HAL mixer ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â our resampler is PASSTHROUGH and BitPerfect stays UNAVAILABLE because
+the endpoint differs from source (ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§3.2/3.3).
 
 ## 0-b. Strict full-project audit (production pass, AI/YT excluded)
 
@@ -34,7 +34,7 @@ the endpoint differs from source (Ã‚Â§3.2/3.3).
 | R2 | Canonical snapshot rebuilt (vendor probes + verification pipeline) on EVERY playback state transition | **High** | Memo-cache keyed on track/route/dsp/stream identity in `scanOutputStateInternal` |
 | R3 | Auto-profile engine rewrote EQ prefs (10 separate disk writes) + re-drove DSP sync on every state change, not just real route changes | **High** | Route-change dedupe in PlaybackService + single-transaction prefs batch + skip-if-unchanged in `applyHiFiProfile` |
 | R4 | `FfmpegDecoder.kt`: dead code, misleading name, `Thread.sleep(2)` polling | Medium | Deleted (zero references) |
-| R5 | Chip-name fabrication strings ("AK4376A/ESS Sabre", "S-Master HX", "Aqstic") returned as DAC identity from runtime probes | Medium | All vendor returns now "OEM Ã¢â‚¬Â¦ (chip unverified) / runtime-probed"; sysfs probing retained as legitimate evidence |
+| R5 | Chip-name fabrication strings ("AK4376A/ESS Sabre", "S-Master HX", "Aqstic") returned as DAC identity from runtime probes | Medium | All vendor returns now "OEM ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ (chip unverified) / runtime-probed"; sysfs probing retained as legitimate evidence |
 | R6 | DynamicProfileEngine policy strings claimed "Bit-Perfect Passthrough"/"Clock Synced" from route alone | Medium | Reworded to capability-neutral text |
 | R7 | `MusicController.initController` retried session bind forever | Low | Bounded at 5 attempts with backoff |
 | R8 | Garbled emoji startup logs in `AntigravityApp` | Low | Clean ASCII rewrite (behavior unchanged) |
@@ -62,8 +62,29 @@ Honest count: **24 distinct defects fixed** (no padding). Suite after: 12 files,
 | C24 | Unused Random import in AudioVisualizer | Trivial | removed |
 
 
-## 1. Playback architecture
+## 0-d. Live-vs-dead control audit (equalizer focus)
 
+Every user-facing audio control was traced end-to-end to the signal path.
+
+| Control | Verdict | Action |
+|---|---|---|
+| 10-band graphic EQ | **LIVE** (native seqlock + fallback JVM) | ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â |
+| Pre-amp / Bass / Treble / Clarity / Air / Warmth / Crossfeed / Balance / Invert-phase / Sub-mono / HRTF on-off + room size | **LIVE** | ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â |
+| Turbo Sharpness toggle | **LIVE** (exciter + limiter) | subtitle corrected (no "dithering" claim) |
+| AutoEQ profiles | **LIVE** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pushes PEQ bands straight to the native handle on select/disable; re-applied at stream open | ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â |
+| Limiter threshold | **LIVE** | ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â |
+| **3D Surround Virtualizer slider** | **DEAD** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only drove framework `Virtualizer`, which is permanently detached while the DSP owns the chain | **Removed from UI** with explanatory note |
+| **Digital Gain Boost (Loudness) slider** | **DEAD** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same detached `LoudnessEnhancer` cause | **Removed from UI** |
+| Triode/Pentode/Dither/Bit-depth params | Engine-live but missing from the *live* JNI resync (only applied at stream open) | Added to `syncWithNativeDsp()` for full parity |
+
+Rule going forward: a control that cannot reach the active signal path is removed,
+not decorated. Framework-effect remnants in EqualizerEngine are retained solely as
+the documented legacy fallback path and never attach while the DSP is enabled.
+
+
+
+
+## 1. Playback architecture
 Media3 ExoPlayer -> custom `OboeAudioSink` -> lock-free write path -> Oboe/AAudio.
 `DefaultAudioSink` fallback is pre-configured before the first buffer whenever native
 open fails or the format is unsupported (`-2`/`-3` verdicts are permanent per-format).
@@ -90,7 +111,7 @@ Renamed semantics, one ring:
 - `atomicFramesWritten`: hardware-accepted frames.
 - staged pending = head - tail of the fixed ring (output samples).
 - hardware PLAYED = throttled position (clamped to written).
-`hasPendingData()` = produced - played > 0 OR staged > 0 Ã¢â‚¬â€ computed purely in
+`hasPendingData()` = produced - played > 0 OR staged > 0 ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â computed purely in
 the output domain via new JNI `getStreamFrameTelemetry`. `framesWritten` as a
 mixed-domain clock has been eliminated from the sink.
 
@@ -162,7 +183,7 @@ code-level, not device-level.
 
 ## 13. Remaining limitations
 
-1. Device matrix Ã‚Â§22 + logcat acceptance Ã‚Â§23 outstanding Ã¢â‚¬â€ final gate for GREEN.
+1. Device matrix ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§22 + logcat acceptance ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§23 outstanding ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â final gate for GREEN.
 2. DSP delay lines persist across seeks by design (documented); dither errors reset only on format change.
 3. `AudioRouteCapability` still lacks an id field; correlation relies on OS enumeration lookup.
 4. Duplicate AudioOutputManager instances remain (pre-existing, out of P0 scope).
@@ -181,8 +202,8 @@ P0-5 LIFECYCLE:       PASS (single serialized owner; CAS lazy-open)
 P0-6 SEEK:            PASS (code+unit)   / device-unverified
 P0-7 TRACK SWITCH:    PASS (code)        / device-unverified
 P0-8 HARDWARE ROUTE:  PASS (proof telemetry + correlation log)
-P0-9 NORMAL PLAYBACK: YELLOW (architecture ready; requires Ã‚Â§22 run)
+P0-9 NORMAL PLAYBACK: YELLOW (architecture ready; requires ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§22 run)
 P0-10 HI-FI:          DEFERRED
-OVERALL:              YELLOW Ã¢â‚¬â€ implement-complete; GREEN requires the
+OVERALL:              YELLOW ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â implement-complete; GREEN requires the
                       documented real-device matrix to pass.
 ```
