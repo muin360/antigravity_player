@@ -69,7 +69,12 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("yt_config", Context.MODE_PRIVATE) }
 
-    var serverUrl by remember { mutableStateOf(prefs.getString("server_url", "http://10.0.2.2:3000") ?: "http://10.0.2.2:3000") }
+    var serverUrl by remember {
+        mutableStateOf(
+            prefs.getString("server_url", null)
+                ?: com.tensorix.antigravityplayer.BuildConfig.DEV_YT_BASE_URL
+        )
+    }
     
     val hiFiEnabled by (PlaybackService.instance?.hiFiEnabled ?: MutableStateFlow(true)).collectAsState()
     val isTurboMode by (PlaybackService.instance?.sampleRateMatching ?: MutableStateFlow(true)).collectAsState()
@@ -510,16 +515,20 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Quick Presets
+                // Quick Presets (endpoints come from build config so dev and
+                // release builds can never ship each other's defaults)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val presets = listOf("http://10.0.2.2:3000", "https://api.tensorix.com")
-                    presets.forEach { url ->
+                    val presets = listOf(
+                        com.tensorix.antigravityplayer.BuildConfig.DEV_YT_BASE_URL to "Emulator",
+                        com.tensorix.antigravityplayer.BuildConfig.PROD_YT_BASE_URL to "Production"
+                    )
+                    presets.forEach { (url, label) ->
                         AssistChip(
-                            onClick = { 
+                            onClick = {
                                 serverUrl = url
                                 prefs.edit().putString("server_url", url).apply()
                             },
-                            label = { Text(if (url.contains("10.0.2.2")) "Emulator" else "Production", fontSize = 10.sp) },
+                            label = { Text(label, fontSize = 10.sp) },
                             colors = AssistChipDefaults.assistChipColors(labelColor = TextPrimary, containerColor = SurfaceDark),
                             border = null
                         )

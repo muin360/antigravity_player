@@ -26,6 +26,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -45,11 +47,14 @@ import com.tensorix.antigravityplayer.util.LrcLine
 @Composable
 fun LyricsSheet(
     song: Song?,
-    currentPositionMs: Long,
+    currentPositionMsFlow: kotlinx.coroutines.flow.StateFlow<Long>,
     lyricsLines: List<LrcLine>,
     onDismiss: () -> Unit
 ) {
     if (song == null) return
+
+    // Phase 22: lyric-sync position updates stay scoped to this sheet.
+    val currentPositionMs by currentPositionMsFlow.collectAsState()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()

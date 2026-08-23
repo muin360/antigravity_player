@@ -16,7 +16,7 @@ object LrcParser {
         val result = mutableListOf<LrcLine>()
         if (lrcContent.isBlank()) return result
 
-        val lineRegex = Regex("\\[(\\d{1,3}):(\\d{2})[.:](\\d{2,3})\\]")
+        val lineRegex = Regex("\\[(\\d{1,3}):(\\d{2})[.:](\\d{1,3})\\]")
 
         for (line in lrcContent.lines()) {
             val trimmedLine = line.trim()

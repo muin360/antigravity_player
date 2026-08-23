@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  dataExtractionRules for API 31+ (cloud backup + device-to-device transfer).
+  API keys must never leave the device through any extraction channel.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="antigravity_ai_keys_secure.xml" />
+        <exclude domain="sharedpref" path="antigravity_ai_keys.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="antigravity_ai_keys_secure.xml" />
+        <exclude domain="sharedpref" path="antigravity_ai_keys.xml" />
+    </device-transfer>
+</data-extraction-rules>

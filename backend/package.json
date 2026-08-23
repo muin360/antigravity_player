@@ -1,15 +1,22 @@
 {
   "name": "antigravity-player-backend",
-  "version": "0.1.0",
-  "description": "Phase 3: YouTube search/stream/download backend for Antigravity Player (yt-dlp based).",
+  "version": "0.2.0",
+  "private": true,
+  "description": "LAN-only YouTube search/stream extraction backend for Antigravity Player (yt-dlp based). See src/server.js header for the security model.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^4.19.2",
     "youtube-dl-exec": "^3.0.2",
     "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }

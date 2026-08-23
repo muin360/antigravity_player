@@ -230,7 +230,8 @@ fun MainAppScreen(
     val songs by viewModel.songs.collectAsState()
     val currentSong by viewModel.currentSong.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
-    val currentPositionMs by viewModel.currentPositionMs.collectAsState()
+    // currentPositionMs intentionally NOT collected here (Phase 22):
+    // 200 ms position ticks must not recompose the whole application tree.
     val durationMs by viewModel.durationMs.collectAsState()
     val shuffleEnabled by viewModel.shuffleEnabled.collectAsState()
     val repeatMode by viewModel.repeatMode.collectAsState()
@@ -306,7 +307,7 @@ fun MainAppScreen(
                     MiniPlayer(
                         song = currentSong,
                         isPlaying = isPlaying,
-                        progressMs = currentPositionMs,
+                        progressMsFlow = viewModel.currentPositionState,
                         durationMs = durationMs,
                         onMiniPlayerClick = { showFullPlayer = true },
                         onPlayPauseClick = { viewModel.togglePlayPause() },
@@ -482,7 +483,7 @@ fun MainAppScreen(
         FullPlayerSheet(
             song = currentSong,
             isPlaying = isPlaying,
-            currentPositionMs = currentPositionMs,
+            currentPositionMsFlow = viewModel.currentPositionState,
             durationMs = durationMs,
             shuffleEnabled = shuffleEnabled,
             repeatMode = repeatMode,
@@ -526,7 +527,7 @@ fun MainAppScreen(
     if (showLyricsSheet && currentSong != null) {
         LyricsSheet(
             song = currentSong,
-            currentPositionMs = currentPositionMs,
+            currentPositionMsFlow = viewModel.currentPositionState,
             lyricsLines = lyricsLines,
             onDismiss = { showLyricsSheet = false }
         )

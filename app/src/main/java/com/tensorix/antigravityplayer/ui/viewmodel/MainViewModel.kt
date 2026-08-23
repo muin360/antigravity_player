@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tensorix.antigravityplayer.ai.AgentAction
 import com.tensorix.antigravityplayer.ai.AiKeyManager
+import com.tensorix.antigravityplayer.ai.AiOutcome
 import com.tensorix.antigravityplayer.ai.AiProvider
 import com.tensorix.antigravityplayer.ai.MusicAiAgent
 import com.tensorix.antigravityplayer.data.MusicRepository
@@ -17,7 +18,9 @@ import com.tensorix.antigravityplayer.data.Playlist
 import com.tensorix.antigravityplayer.data.PlaylistWithSongs
 import com.tensorix.antigravityplayer.data.Song
 import com.tensorix.antigravityplayer.data.remote.YtApiService
+import com.tensorix.antigravityplayer.data.remote.YtResult
 import com.tensorix.antigravityplayer.data.remote.YtSearchResultItem
+import com.tensorix.antigravityplayer.data.remote.YtStreamResponse
 import com.tensorix.antigravityplayer.audio.AudioOutputManager
 import com.tensorix.antigravityplayer.audio.AudiophilePlaybackSnapshot
 import com.tensorix.antigravityplayer.audio.AudioTrackInfo
@@ -172,6 +175,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentSong get() = musicController.currentSong
     val isPlaying get() = musicController.isPlaying
     val currentPositionMs get() = musicController.currentPositionMs
+
+    /** Flow handle for subtree-scoped collection (Phase 22 perf fix). */
+    val currentPositionState: StateFlow<Long> get() = musicController.currentPositionMs
     val durationMs get() = musicController.durationMs
     val shuffleEnabled get() = musicController.shuffleEnabled
     val repeatMode get() = musicController.repeatMode
@@ -305,11 +311,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isAiProcessing.value = true
             try {
-                val action = musicAiAgent.processUserPrompt(prompt)
-                executeAgentAction(action)
+                when (val outcome = musicAiAgent.processUserPrompt(prompt)) {
+                    is AiOutcome.Success -> executeAgentAction(outcome.action)
+                    is AiOutcome.Failure -> addAiReply("⚠ ${outcome.userMessage}")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
-                addAiReply("Error processing prompt: \${e.message}")
+                addAiReply("⚠ Unexpected error while processing your request.")
             } finally {
                 _isAiProcessing.value = false
             }
@@ -346,10 +355,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (match != null) {
                     playSong(match, songs.value)
-                    addAiReply("▶ Playing '\${match.title}' by \${match.artist}.")
+                    addAiReply("▶ Playing '${match.title}' by ${match.artist}.")
                 } else {
                     searchYtTracks(action.query)
-                    addAiReply("🔍 Song not found locally. Searching YouTube for '\${action.query}'...")
+                    addAiReply("🔍 Song not found locally. Searching YouTube for '${action.query}'...")
                 }
             }
             is AgentAction.PlayMood -> {
@@ -360,37 +369,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.ifEmpty { songs.value.shuffled() }
 
                 playAll(moodSongs, shuffle = true)
-                addAiReply("🎨 Launched \${action.mood.uppercase()} mood playlist (\${moodSongs.size} tracks)!")
+                addAiReply("🎨 Launched ${action.mood.uppercase()} mood playlist (${moodSongs.size} tracks)!")
             }
             is AgentAction.SearchYoutube -> {
                 searchYtTracks(action.query)
-                addAiReply("🔍 Searching YouTube for '\${action.query}'...")
+                addAiReply("🔍 Searching YouTube for '${action.query}'...")
             }
             is AgentAction.DownloadYoutube -> {
-                addAiReply("⬇ Searching & downloading '\${action.query}' from YouTube...")
+                addAiReply("⬇ Searching & downloading '${action.query}' from YouTube...")
                 viewModelScope.launch {
                     try {
-                        val results = ytApiService.searchTracks(action.query)
-                        if (results.isNotEmpty()) {
-                            _ytSearchResults.value = results
-                            downloadYtTrack(results.first())
-                        } else {
-                            addAiReply("❌ No results found for '\${action.query}' on YouTube.")
+                        when (val result = ytApiService.searchTracks(action.query)) {
+                            is YtResult.Success -> {
+                                if (result.value.isNotEmpty()) {
+                                    _ytSearchResults.value = result.value
+                                    downloadYtTrack(result.value.first())
+                                } else {
+                                    addAiReply("❌ No results found for '${action.query}' on YouTube.")
+                                }
+                            }
+                            is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
                         }
-                    } catch (e: Exception) {
-                        addAiReply("❌ Download failed: \${e.message}")
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     }
                 }
             }
             is AgentAction.SetEqualizerPreset -> {
                 equalizerEngine?.builtInPresets?.find { it.name.equals(action.presetName, ignoreCase = true) }?.let {
                     equalizerEngine?.applyPreset(it)
-                    addAiReply("🎛 Applied '\${it.name}' Equalizer Preset!")
-                } ?: addAiReply("❓ EQ preset '\${action.presetName}' not found.")
+                    addAiReply("🎛 Applied '${it.name}' Equalizer Preset!")
+                } ?: addAiReply("❓ EQ preset '${action.presetName}' not found.")
             }
             is AgentAction.SetSleepTimer -> {
                 setSleepTimer(action.minutes)
-                addAiReply("⏲ Sleep timer set for \${action.minutes} minutes.")
+                addAiReply("⏲ Sleep timer set for ${action.minutes} minutes.")
             }
             is AgentAction.PlaybackControl -> {
                 when (action.command) {
@@ -400,7 +413,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     "previous", "prev", "back" -> skipToPrevious()
                     "shuffle" -> toggleShuffle()
                 }
-                addAiReply("⏯ Executed: \${action.command.uppercase()}")
+                addAiReply("⏯ Executed: ${action.command.uppercase()}")
             }
             is AgentAction.ChatReply -> {
                 addAiReply(action.message)
@@ -421,7 +434,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 repository.scanLocalLibrary()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             } finally {
                 _isScanning.value = false
             }
@@ -501,9 +514,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isYtSearching.value = true
             try {
-                _ytSearchResults.value = ytApiService.searchTracks(query)
-            } catch (e: Exception) {
-                e.printStackTrace()
+                when (val result = ytApiService.searchTracks(query)) {
+                    is YtResult.Success -> _ytSearchResults.value = result.value
+                    is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } finally {
                 _isYtSearching.value = false
             }
@@ -513,22 +529,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun streamYtTrack(item: YtSearchResultItem) {
         viewModelScope.launch {
             try {
-                val response = ytApiService.getStreamUrl(item.id) ?: return@launch
-                val onlineSong = Song(
-                    title = response.title,
-                    artist = response.artist,
-                    album = "YouTube Stream",
-                    durationMs = response.durationSeconds * 1000,
-                    filePath = response.streamUrl,
-                    albumArtUri = response.thumbnailUrl,
-                    source = "youtube",
-                    youtubeId = response.id,
-                    format = "AAC",
-                    bitrate = 128
-                )
-                musicController.playSong(onlineSong, listOf(onlineSong))
-            } catch (e: Exception) {
-                e.printStackTrace()
+                when (val result = ytApiService.getStreamUrl(item.id)) {
+                    is YtResult.Success -> {
+                        val response = result.value
+                        if (response.streamUrl.isBlank()) return@launch
+                        val onlineSong = Song(
+                            title = response.title,
+                            artist = response.artist,
+                            album = "YouTube Stream",
+                            durationMs = response.durationSeconds * 1000,
+                            filePath = response.streamUrl,
+                            albumArtUri = response.thumbnailUrl,
+                            source = "youtube",
+                            youtubeId = response.id,
+                            format = "AAC",
+                            bitrate = 128
+                        )
+                        musicController.playSong(onlineSong, listOf(onlineSong))
+                    }
+                    is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             }
         }
     }
@@ -539,7 +561,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Check duplicate
                 val existing = repository.getSongByYoutubeId(item.id)
                 if (existing != null) {
-                    addAiReply("✅ '\${item.title}' is already downloaded!")
+                    addAiReply("✅ '${item.title}' is already downloaded!")
                     playSong(existing)
                     return@launch
                 }
@@ -547,45 +569,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _downloadingTrackId.value = item.id
                 _downloadProgress.value = 0
 
-                val response = ytApiService.getStreamUrl(item.id)
-                if (response == null || response.streamUrl.isBlank()) {
-                    addAiReply("❌ Could not get stream URL for '\${item.title}'.")
-                    _downloadingTrackId.value = null
-                    _downloadProgress.value = -1
-                    return@launch
+                val streamResult = ytApiService.getStreamUrl(item.id)
+                val response: YtStreamResponse
+                when (streamResult) {
+                    is YtResult.Success -> {
+                        if (streamResult.value.streamUrl.isBlank()) {
+                            addAiReply("❌ Could not get stream URL for '${item.title}'.")
+                            _downloadingTrackId.value = null
+                            _downloadProgress.value = -1
+                            return@launch
+                        }
+                        response = streamResult.value
+                    }
+                    is YtResult.Failure -> {
+                        addAiReply("⚠ ${streamResult.userMessage}")
+                        _downloadingTrackId.value = null
+                        _downloadProgress.value = -1
+                        return@launch
+                    }
                 }
 
-                val localPath = ytApiService.downloadTrackToDevice(
+                when (val dl = ytApiService.downloadTrackToDevice(
                     context = getApplication(),
                     streamResponse = response,
                     onProgress = { progress ->
                         _downloadProgress.value = progress
                     }
-                )
-
-                if (localPath != null) {
-                    val downloadedSong = Song(
-                        title = response.title,
-                        artist = response.artist,
-                        album = "YouTube Downloads",
-                        durationMs = response.durationSeconds * 1000,
-                        filePath = localPath,
-                        albumArtUri = response.thumbnailUrl,
-                        source = "youtube",
-                        youtubeId = response.id,
-                        isDownloaded = true,
-                        format = "M4A",
-                        bitrate = 128
-                    )
-                    repository.saveDownloadedSong(downloadedSong)
-                    addAiReply("✅ Downloaded '\${response.title}' successfully! Saved to Music/AntigravityPlayer/")
-                    Toast.makeText(getApplication(), "Downloaded: \${response.title}", Toast.LENGTH_SHORT).show()
-                } else {
-                    addAiReply("❌ Download failed for '\${response.title}'. Please try again.")
+                )) {
+                    is YtResult.Success -> {
+                        val localPath = dl.value
+                        val downloadedSong = Song(
+                            title = response.title,
+                            artist = response.artist,
+                            album = "YouTube Downloads",
+                            durationMs = response.durationSeconds * 1000,
+                            filePath = localPath,
+                            albumArtUri = response.thumbnailUrl,
+                            source = "youtube",
+                            youtubeId = response.id,
+                            isDownloaded = true,
+                            format = "M4A",
+                            bitrate = 128
+                        )
+                        repository.saveDownloadedSong(downloadedSong)
+                        addAiReply("✅ Downloaded '${response.title}' successfully! Saved to Music/AntigravityPlayer/")
+                        Toast.makeText(getApplication(), "Downloaded: ${response.title}", Toast.LENGTH_SHORT).show()
+                    }
+                    is YtResult.Failure -> {
+                        addAiReply("⚠ ${dl.userMessage}")
+                        _downloadProgress.value = -1
+                    }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                addAiReply("❌ Download error: \${e.message}")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } finally {
                 _downloadingTrackId.value = null
                 _downloadProgress.value = -1
@@ -625,7 +661,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         }
-        voiceAssistantManager.stopListening()
+        voiceAssistantManager.release()
         musicController.release()
         audioOutputManager.release()
     }

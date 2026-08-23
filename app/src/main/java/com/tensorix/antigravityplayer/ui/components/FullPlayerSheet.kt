@@ -32,7 +32,7 @@ import java.util.Locale
 fun FullPlayerSheet(
     song: Song?,
     isPlaying: Boolean,
-    currentPositionMs: Long,
+    currentPositionMsFlow: kotlinx.coroutines.flow.StateFlow<Long>,
     durationMs: Long,
     shuffleEnabled: Boolean,
     repeatMode: Int,
@@ -53,6 +53,9 @@ fun FullPlayerSheet(
     isHiFiSupported: Boolean = false
 ) {
     if (song == null) return
+
+    // Phase 22: position updates recompose only this sheet, not the app tree.
+    val currentPositionMs by currentPositionMsFlow.collectAsState()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 

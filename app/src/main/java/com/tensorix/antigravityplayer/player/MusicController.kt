@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -76,7 +77,7 @@ class MusicController(private val context: Context) {
                 pendingPlayAction = null
                 controllerFuture = null
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
                 controllerFuture = null
                 // Retry after delay if failed
                 scope.launch {
@@ -150,7 +151,6 @@ class MusicController(private val context: Context) {
                     val song = songMap[songId] ?: songFromMediaItem(it)
                     _currentSong.value = song
                     _durationMs.value = controller.duration.coerceAtLeast(0L)
-                    val replayGain = readReplayGainTags(song.filePath, song.format)
 
                     val calculatedBitDepth = when {
                         song.format == "DSD" || song.format == "DXD" -> 32
@@ -161,18 +161,26 @@ class MusicController(private val context: Context) {
                         else -> 16
                     }
 
-                    PlaybackService.instance?.updateCurrentTrackInfo(
-                        title = song.title,
-                        artist = song.artist,
-                        codec = song.format ?: "Lossless PCM",
-                        bitrateKbps = song.bitrate,
-                        bitDepth = calculatedBitDepth,
-                        sampleRateHz = if (song.sampleRate > 0) song.sampleRate else 44100,
-                        trackReplayGainDb = replayGain.trackGainDb,
-                        albumReplayGainDb = replayGain.albumGainDb,
-                        peakAmplitude = replayGain.trackPeak,
-                        useAlbumGain = false
-                    )
+                    // ReplayGain parsing touches disk: keep it OFF the main
+                    // thread and read only a bounded header region instead of
+                    // loading entire lossless files into memory.
+                    scope.launch {
+                        val replayGain = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            readReplayGainTags(song.filePath, song.format)
+                        }
+                        PlaybackService.instance?.updateCurrentTrackInfo(
+                            title = song.title,
+                            artist = song.artist,
+                            codec = song.format ?: "Lossless PCM",
+                            bitrateKbps = song.bitrate,
+                            bitDepth = calculatedBitDepth,
+                            sampleRateHz = if (song.sampleRate > 0) song.sampleRate else 44100,
+                            trackReplayGainDb = replayGain.trackGainDb,
+                            albumReplayGainDb = replayGain.albumGainDb,
+                            peakAmplitude = replayGain.trackPeak,
+                            useAlbumGain = false
+                        )
+                    }
                 } ?: run {
                     _currentSong.value = null
                 }
@@ -417,7 +425,20 @@ class MusicController(private val context: Context) {
         val ext = path.substringAfterLast('.', "").lowercase()
         if (ext !in setOf("mp3", "flac", "ogg", "opus") && codec?.equals("MP3", true) != true) return ReplayGainTags()
 
-        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return ReplayGainTags()
+        // Bounded header read: ReplayGain lives in ID3v2 (start of file) or
+        // FLAC Vorbis comments (metadata blocks before audio). 1 MB covers
+        // both without ever loading a full lossless track into memory.
+        val bytes = runCatching {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val size = minOf(raf.length(), 1024L * 1024L).toInt()
+                if (size <= 0) null
+                else {
+                    val buf = ByteArray(size)
+                    raf.readFully(buf)
+                    buf
+                }
+            }
+        }.getOrNull() ?: return ReplayGainTags()
         val text = String(bytes, Charsets.ISO_8859_1)
         return ReplayGainTags(
             trackGainDb = extractReplayGainValue(text, listOf("REPLAYGAIN_TRACK_GAIN", "TXXX:REPLAYGAIN_TRACK_GAIN")),

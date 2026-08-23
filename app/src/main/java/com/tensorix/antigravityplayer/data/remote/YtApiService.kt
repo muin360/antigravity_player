@@ -2,134 +2,188 @@ package com.tensorix.antigravityplayer.data.remote
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
+import com.tensorix.antigravityplayer.BuildConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+
+/** Typed failure taxonomy for backend + download operations. */
+enum class YtFailureCode {
+    NETWORK_TIMEOUT,
+    NETWORK_UNAVAILABLE,
+    HTTP_CLIENT_ERROR,   // 4xx (bad request, not found, ...)
+    HTTP_SERVER_ERROR,   // 5xx
+    INVALID_RESPONSE,    // 2xx but unparseable / missing fields
+    CANCELLED
+}
 
 /**
- * Lightweight native HTTP API client for YouTube Backend Service
- * Supports dynamic host discovery, search, stream, and scoped-storage download-to-device operations across all Android versions.
+ * Result wrapper: callers can distinguish "no results" from "backend broken".
+ */
+sealed class YtResult<out T> {
+    data class Success<T : Any>(val value: T) : YtResult<T>()
+    data class Failure(val code: YtFailureCode, val userMessage: String) : YtResult<Nothing>()
+}
+
+/**
+ * Native HTTP client for the YouTube extraction backend.
+ *
+ * Endpoint policy:
+ *  - DEBUG builds default to the local development server (emulator loopback)
+ *    and may use any user-configured http:// LAN URL.
+ *  - RELEASE builds REQUIRE an https:// endpoint; insecure overrides are
+ *    rejected outright and the production base URL from BuildConfig is used.
  */
 class YtApiService(private val context: Context? = null) {
 
-    private fun getBaseUrl(): String {
-        context?.let { ctx ->
-            val prefs = ctx.getSharedPreferences("yt_config", Context.MODE_PRIVATE)
-            val customUrl = prefs.getString("server_url", null)
-            if (!customUrl.isNullOrBlank()) {
-                return customUrl.trimEnd('/')
-            }
-        }
-        return "http://10.0.2.2:3000"
+    companion object {
+        private const val TAG = "YtApiService"
+        private const val CONNECT_TIMEOUT_MS = 8_000
+        private const val READ_TIMEOUT_MS = 20_000
+        private const val DOWNLOAD_CONNECT_TIMEOUT_MS = 15_000
+        private const val DOWNLOAD_READ_TIMEOUT_MS = 60_000
+        private const val MAX_QUERY_LENGTH = 200
+
+        /** Validates a YouTube video id before it ever reaches the backend. */
+        fun isValidVideoId(id: String): Boolean =
+            id.matches(Regex("^[A-Za-z0-9_-]{11}$"))
     }
 
-    suspend fun searchTracks(query: String): List<YtSearchResultItem> = withContext(Dispatchers.IO) {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val baseUrl = getBaseUrl()
-        val urlString = "$baseUrl/api/search?q=$encodedQuery"
-        val jsonText = httpGetWithFallback(urlString, "/api/search?q=$encodedQuery") ?: return@withContext emptyList()
+    // ------------------------------------------------------------------
+    // Base URL resolution (dev/prod separated via BuildConfig)
+    // ------------------------------------------------------------------
 
-        try {
-            val root = JSONObject(jsonText)
-            val resultsArray = root.optJSONArray("results") ?: return@withContext emptyList()
-            val list = mutableListOf<YtSearchResultItem>()
-            for (i in 0 until resultsArray.length()) {
-                val item = resultsArray.getJSONObject(i)
-                list.add(
-                    YtSearchResultItem(
-                        id = item.optString("id"),
-                        title = item.optString("title", "Unknown Track"),
-                        artist = item.optString("artist", "YouTube"),
-                        durationSeconds = item.optLong("duration", 0L),
-                        thumbnailUrl = item.optString("thumbnail", "")
-                    )
+    private fun getBaseUrl(): String {
+        val custom = context?.let { ctx ->
+            runCatching {
+                ctx.getSharedPreferences("yt_config", Context.MODE_PRIVATE)
+                    .getString("server_url", null)
+            }.getOrNull()
+        }?.takeIf { it.isNotBlank() }
+
+        if (custom != null) {
+            val trimmed = custom.trim().trimEnd('/')
+            val isSecure = trimmed.startsWith("https://")
+            if (!isSecure && !BuildConfig.DEBUG) {
+                Log.w(TAG, "Rejecting insecure custom backend URL in release build.")
+                return BuildConfig.PROD_YT_BASE_URL.trimEnd('/')
+            }
+            return trimmed
+        }
+        return if (BuildConfig.DEBUG) {
+            BuildConfig.DEV_YT_BASE_URL.trimEnd('/')
+        } else {
+            BuildConfig.PROD_YT_BASE_URL.trimEnd('/')
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Public API
+    // ------------------------------------------------------------------
+
+    suspend fun searchTracks(query: String): YtResult<List<YtSearchResultItem>> =
+        withContext(Dispatchers.IO) {
+            val sanitized = query.trim().take(MAX_QUERY_LENGTH)
+            if (sanitized.isEmpty()) {
+                return@withContext YtResult.Failure(
+                    YtFailureCode.INVALID_RESPONSE, "Search query is empty."
                 )
             }
-            list
-        } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
+            val encodedQuery = java.net.URLEncoder.encode(sanitized, "UTF-8")
+            val base = getBaseUrl()
+            fetchJson("$base/api/search?q=$encodedQuery") { json ->
+                val root = JSONObject(json)
+                val array = root.optJSONArray("results")
+                    ?: throw IllegalStateException("missing 'results'")
+                buildList {
+                    for (i in 0 until array.length()) {
+                        val item = array.getJSONObject(i)
+                        add(
+                            YtSearchResultItem(
+                                id = item.optString("id"),
+                                title = item.optString("title", "Unknown Track"),
+                                artist = item.optString("artist", "YouTube"),
+                                durationSeconds = item.optLong("duration", 0L),
+                                thumbnailUrl = item.optString("thumbnail", "")
+                            )
+                        )
+                    }
+                }
+            }
         }
-    }
 
-    suspend fun getStreamUrl(id: String): YtStreamResponse? = withContext(Dispatchers.IO) {
-        val baseUrl = getBaseUrl()
-        val urlString = "$baseUrl/api/stream?id=$id"
-        val jsonText = httpGetWithFallback(urlString, "/api/stream?id=$id") ?: return@withContext null
-
-        try {
-            val root = JSONObject(jsonText)
-            YtStreamResponse(
-                id = root.optString("id", id),
-                streamUrl = root.optString("streamUrl", ""),
-                title = root.optString("title", "Online Track"),
-                artist = root.optString("artist", "YouTube"),
-                durationSeconds = root.optLong("duration", 0L),
-                thumbnailUrl = root.optString("thumbnail", "")
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+    suspend fun getStreamUrl(id: String): YtResult<YtStreamResponse> =
+        withContext(Dispatchers.IO) {
+            if (!isValidVideoId(id)) {
+                return@withContext YtResult.Failure(
+                    YtFailureCode.INVALID_RESPONSE, "Invalid video reference."
+                )
+            }
+            val base = getBaseUrl()
+            fetchJson("$base/api/stream?id=$id") { json ->
+                val root = JSONObject(json)
+                YtStreamResponse(
+                    id = root.optString("id", id),
+                    streamUrl = root.optString("streamUrl", ""),
+                    title = root.optString("title", "Online Track"),
+                    artist = root.optString("artist", "YouTube"),
+                    durationSeconds = root.optLong("duration", 0L),
+                    thumbnailUrl = root.optString("thumbnail", "")
+                )
+            }
         }
-    }
 
     /**
-     * Downloads a YouTube track audio file to device storage.
-     * Uses dynamic multi-directory fallback (Public Music -> External Files -> Internal Files)
-     * for 100% compatibility across all Android OS versions (API 26-34+).
-     * Performs automatic cleanup of partial downloads on failure.
+     * Downloads a YouTube track to device storage with scoped-storage-aware
+     * directory fallbacks. Partial files are removed on failure.
      */
     suspend fun downloadTrackToDevice(
         context: Context,
         streamResponse: YtStreamResponse,
         onProgress: (Int) -> Unit = {}
-    ): String? = withContext(Dispatchers.IO) {
+    ): YtResult<String> = withContext(Dispatchers.IO) {
         var outputFile: File? = null
-        var connection: HttpURLConnection? = null
+        var connection: java.net.HttpURLConnection? = null
         try {
             val streamUrl = streamResponse.streamUrl
-            if (streamUrl.isBlank()) return@withContext null
+            if (streamUrl.isBlank()) {
+                return@withContext YtResult.Failure(
+                    YtFailureCode.INVALID_RESPONSE, "No downloadable stream was provided."
+                )
+            }
 
-            val targetDir = runCatching {
-                val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
-                val dir = File(musicDir, "AntigravityPlayer")
-                if (!dir.exists()) {
-                    val created = dir.mkdirs()
-                    if (!created && !dir.exists()) null else dir
-                } else dir
-            }.getOrNull()
-                ?: context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
-                ?: File(context.filesDir, "Music").also { if (!it.exists()) it.mkdirs() }
-
+            val targetDir = resolveTargetDir(context)
             val safeTitle = streamResponse.title
                 .replace(Regex("[^\\p{L}\\p{Nd}\\s\\-_]"), "")
                 .trim()
                 .replace(Regex("\\s+"), "_")
                 .take(60)
                 .ifBlank { "Track_${streamResponse.id}" }
-            val fileName = "${safeTitle}_${streamResponse.id}.m4a"
-            outputFile = File(targetDir, fileName)
+            outputFile = File(targetDir, "${safeTitle}_${streamResponse.id}.m4a")
 
             if (outputFile.exists() && outputFile.length() > 0) {
                 onProgress(100)
-                return@withContext outputFile.absolutePath
+                return@withContext YtResult.Success(outputFile.absolutePath)
             }
 
-            val url = URL(streamUrl)
-            connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 15000
-            connection.readTimeout = 30000
+            val url = java.net.URL(streamUrl)
+            connection = url.openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
+            connection.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
             connection.requestMethod = "GET"
 
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) {
                 outputFile.delete()
-                return@withContext null
+                return@withContext classifyHttpFailure(responseCode)
             }
 
             val totalBytes = connection.contentLength.toLong()
@@ -140,6 +194,8 @@ class YtApiService(private val context: Context? = null) {
                     val buffer = ByteArray(8192)
                     var bytesRead: Int
                     while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        // Cooperative cancellation for long downloads.
+                        kotlin.coroutines.coroutineContext.ensureActive()
                         fos.write(buffer, 0, bytesRead)
                         downloadedBytes += bytesRead
                         if (totalBytes > 0) {
@@ -151,47 +207,78 @@ class YtApiService(private val context: Context? = null) {
             }
 
             onProgress(100)
-            return@withContext outputFile.absolutePath
-        } catch (e: Exception) {
-            e.printStackTrace()
-            outputFile?.let { if (it.exists()) it.delete() }
-            null
+            YtResult.Success(outputFile.absolutePath)
+        } catch (e: IOException) {
+            outputFile?.delete()
+            mapIo(e)
         } finally {
             connection?.disconnect()
         }
     }
 
-    private fun httpGetWithFallback(primaryUrl: String, path: String): String? {
-        val urlsToTry = mutableListOf(primaryUrl)
-        if (!primaryUrl.contains("localhost") && !primaryUrl.contains("127.0.0.1")) {
-            urlsToTry.add("http://localhost:3000$path")
-            urlsToTry.add("http://127.0.0.1:3000$path")
-        }
-
-        for (u in urlsToTry) {
-            val response = httpGet(u)
-            if (response != null) return response
-        }
-        return null
+    private fun resolveTargetDir(context: Context): File {
+        return runCatching {
+            val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            val dir = File(musicDir, "AntigravityPlayer")
+            if (!dir.exists() && !dir.mkdirs() && !dir.exists()) null else dir
+        }.getOrNull()
+            ?: context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+            ?: File(context.filesDir, "Music").also { if (!it.exists()) it.mkdirs() }
     }
 
-    private fun httpGet(urlString: String): String? {
-        var connection: HttpURLConnection? = null
+    // ------------------------------------------------------------------
+    // Transport internals
+    // ------------------------------------------------------------------
+
+    private inline fun <T : Any> fetchJson(
+        urlString: String,
+        parse: (String) -> T
+    ): YtResult<T> {
+        var connection: java.net.HttpURLConnection? = null
         return try {
-            val url = URL(urlString)
-            connection = url.openConnection() as HttpURLConnection
+            val url = java.net.URL(urlString)
+            connection = url.openConnection() as java.net.HttpURLConnection
             connection.requestMethod = "GET"
-            connection.connectTimeout = 6000
-            connection.readTimeout = 6000
-            if (connection.responseCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } else {
-                null
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS
+
+            when (connection.responseCode) {
+                in 200..299 -> try {
+                    YtResult.Success(parse(connection.inputStream.bufferedReader().use { it.readText() }))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    YtResult.Failure(YtFailureCode.INVALID_RESPONSE, "The online service returned malformed data.")
+                }
+                else -> classifyHttpFailure(connection.responseCode)
             }
         } catch (e: Exception) {
-            null
+            // Never swallow coroutine cancellation.
+            if (e is CancellationException) throw e
+            mapIo(e)
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    private fun classifyHttpFailure(code: Int): YtResult.Failure =
+        if (code in 400..499) {
+            YtResult.Failure(YtFailureCode.HTTP_CLIENT_ERROR, "Online service rejected the request (HTTP $code).")
+        } else {
+            YtResult.Failure(YtFailureCode.HTTP_SERVER_ERROR, "Online service error (HTTP $code). Try again later.")
+        }
+
+    private fun mapIo(e: Exception): YtResult.Failure = when (e) {
+        is kotlinx.coroutines.CancellationException ->
+            YtResult.Failure(YtFailureCode.CANCELLED, "Operation cancelled.")
+        is SocketTimeoutException ->
+            YtResult.Failure(YtFailureCode.NETWORK_TIMEOUT, "Connection timed out.")
+        is UnknownHostException ->
+            YtResult.Failure(YtFailureCode.NETWORK_UNAVAILABLE, "Cannot reach the online service.")
+        is IOException ->
+            YtResult.Failure(YtFailureCode.NETWORK_UNAVAILABLE, "Network error during transfer.")
+        else -> {
+            Log.e(TAG, "Unexpected YT operation failure: ${e.javaClass.simpleName}")
+            YtResult.Failure(YtFailureCode.INVALID_RESPONSE, "Unexpected failure during the operation.")
         }
     }
 }

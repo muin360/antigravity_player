@@ -47,7 +47,7 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                 sortOrder
             )
         } catch (e: SecurityException) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             null
         }
 

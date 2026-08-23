@@ -7,7 +7,6 @@ import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.media.audiofx.Virtualizer
-import android.os.SystemClock
 import androidx.core.content.edit
 import com.tensorix.antigravityplayer.audio.Audiophile64BitDspProcessor
 import androidx.media3.common.util.UnstableApi
@@ -34,8 +33,6 @@ class EqualizerEngine(private val context: Context) {
     private var presetReverb: android.media.audiofx.PresetReverb? = null
 
     private var currentAudioSessionId: Int = 0
-    @Volatile
-    private var lastBandUpdateTime: Long = 0L
 
     private val _isEnabled = MutableStateFlow(prefs.getBoolean("eq_enabled", true))
     val isEnabled: StateFlow<Boolean> = _isEnabled.asStateFlow()
@@ -78,7 +75,7 @@ class EqualizerEngine(private val context: Context) {
     private val _loudnessGain = MutableStateFlow<Int>(prefs.getInt("loudness_gain", 0)) // mB
     val loudnessGain: StateFlow<Int> = _loudnessGain.asStateFlow()
 
-    private val _preAmpGainDb = MutableStateFlow<Float>(prefs.getFloat("pre_amp_db", 3.5f))
+    private val _preAmpGainDb = MutableStateFlow<Float>(prefs.getFloat("pre_amp_db", 0.0f))
     val preAmpGainDb: StateFlow<Float> = _preAmpGainDb.asStateFlow()
 
     private val _isTurboSharpness = MutableStateFlow(prefs.getBoolean("turbo_sharpness", true))
@@ -90,13 +87,15 @@ class EqualizerEngine(private val context: Context) {
     private val _limiterThreshold = MutableStateFlow<Float>(prefs.getFloat("limiter_threshold", 0.0f))
     val limiterThreshold: StateFlow<Float> = _limiterThreshold.asStateFlow()
 
-    private val _clarityGain = MutableStateFlow<Float>(prefs.getFloat("clarity_gain", 3.5f))
+    // Neutral defaults for fresh installs (existing users keep saved values):
+    // a "Flat" configuration must not colour the signal (Phase 15.4).
+    private val _clarityGain = MutableStateFlow<Float>(prefs.getFloat("clarity_gain", 0.0f))
     val clarityGain: StateFlow<Float> = _clarityGain.asStateFlow()
 
-    private val _warmSaturation = MutableStateFlow<Float>(prefs.getFloat("warm_saturation", 0.05f))
+    private val _warmSaturation = MutableStateFlow<Float>(prefs.getFloat("warm_saturation", 0.0f))
     val warmSaturation: StateFlow<Float> = _warmSaturation.asStateFlow()
 
-    private val _airPresence = MutableStateFlow<Float>(prefs.getFloat("air_presence", 2.0f))
+    private val _airPresence = MutableStateFlow<Float>(prefs.getFloat("air_presence", 0.0f))
     val airPresence: StateFlow<Float> = _airPresence.asStateFlow()
 
     private val _crossfeedLevel = MutableStateFlow<Float>(prefs.getFloat("crossfeed_level", 0.0f))
@@ -120,10 +119,13 @@ class EqualizerEngine(private val context: Context) {
     private val _currentPresetName = MutableStateFlow(prefs.getString("current_preset", "Flat") ?: "Flat")
     val currentPresetName: StateFlow<String> = _currentPresetName.asStateFlow()
 
+    // Fresh installs start in REFERENCE (transparent) mode. AUDIOPHILE/DYNAMIC
+    // are deliberate sound signatures a user opts into; auto-applying one at
+    // startup used to silently defeat the neutral-defaults contract.
     private val _listeningMode = MutableStateFlow(
         com.tensorix.antigravityplayer.audio.ListeningMode.valueOf(
-            prefs.getString("listening_mode", com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE.name) 
-                ?: com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE.name
+            prefs.getString("listening_mode", com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE.name)
+                ?: com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE.name
         )
     )
     val listeningMode: StateFlow<com.tensorix.antigravityplayer.audio.ListeningMode> = _listeningMode.asStateFlow()
@@ -232,7 +234,7 @@ class EqualizerEngine(private val context: Context) {
                     bb.setStrength(_bassBoostStrength.value)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             }
 
             // Virtualizer
@@ -244,7 +246,7 @@ class EqualizerEngine(private val context: Context) {
                     virt.setStrength(_virtualizerStrength.value)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             }
 
             // Loudness Enhancer
@@ -254,11 +256,11 @@ class EqualizerEngine(private val context: Context) {
                 le.enabled = _isEnabled.value
                 le.setTargetGain(_loudnessGain.value)
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             }
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
     }
 
@@ -339,12 +341,11 @@ class EqualizerEngine(private val context: Context) {
     }
 
     fun setBandLevel(band: Short, level: Short) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastBandUpdateTime < 16) return
-        lastBandUpdateTime = now
-
+        // No drop-on-throttle: every update lands. The heavy work below is
+        // cheap post-hardening (atomic param stores + queued coefficient
+        // rebuilds), so slider-rate storms are harmless.
         dspProcessor?.setBandGain(band.toInt(), level.toDouble() / 100.0)
-        
+
         val currentLevels = _bandLevels.value.toMutableList()
         if (band.toInt() in currentLevels.indices) {
             currentLevels[band.toInt()] = level
@@ -357,7 +358,6 @@ class EqualizerEngine(private val context: Context) {
             prefs.edit().putString("current_preset", "Custom").apply()
         }
 
-        // Also save to prefs immediately
         prefs.edit().putInt("band_$band", level.toInt()).apply()
         syncWithDsp()
 
@@ -367,7 +367,7 @@ class EqualizerEngine(private val context: Context) {
                     eq.setBandLevel(band, level)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             }
         }
     }
@@ -384,7 +384,7 @@ class EqualizerEngine(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
         prefs.edit().putInt("bass_boost", safeStrength.toInt()).apply()
     }
@@ -399,7 +399,7 @@ class EqualizerEngine(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
         prefs.edit().putInt("virtualizer", safeStrength.toInt()).apply()
     }
@@ -409,7 +409,7 @@ class EqualizerEngine(private val context: Context) {
         try {
             loudnessEnhancer?.setTargetGain(gainmB)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
         prefs.edit().putInt("loudness_gain", gainmB).apply()
     }
@@ -561,17 +561,17 @@ class EqualizerEngine(private val context: Context) {
     fun setEnabled(enabled: Boolean) {
         _isEnabled.value = enabled
         dspProcessor?.isEnabled = enabled
-        
-        // When 64-bit DSP is enabled, native effects MUST be released
+
         if (enabled && dspProcessor != null) {
+            // JVM/native DSP owns the EQ: framework effects stay detached.
             release()
-        } else if (currentAudioSessionId != 0) {
-            // Fallback to native if DSP not present/off
-            val session = currentAudioSessionId
-            currentAudioSessionId = 0
-            attachToAudioSession(session)
+        } else if (!enabled) {
+            // Disabling the equalizer must NOT silently fall through to the
+            // framework Equalizer with the same bands applied (previous bug):
+            // off means off.
+            release()
         }
-        
+
         dspProcessor?.updateAllFiltersLive()
         prefs.edit().putBoolean("eq_enabled", enabled).apply()
         syncWithDsp()

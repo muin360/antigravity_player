@@ -140,21 +140,32 @@ object AudioEngine {
 
     /**
      * Single recovery authority for stream errors reported by native layer or AudioSink.
+     * Reentrancy-guarded: concurrent error reports collapse into one recovery pass.
      */
     fun handleStreamError(errorCode: Int, context: Context) {
-        runCatching { Log.w("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=STARTING") }
-        _recoveryState.value = "RECOVERING"
-        invalidate()
-
-        val service = com.tensorix.antigravityplayer.player.PlaybackService.instance
-        val sink = service?.activeOboeAudioSink
-        if (sink != null) {
-            val recoveredNative = sink.recoverFromError(errorCode)
-            val resultStr = if (recoveredNative) "RECOVERED_NATIVE" else "RECOVERED_FALLBACK"
-            runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=$resultStr") }
+        if (!recoveryInProgress.compareAndSet(false, true)) {
+            runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode result=SKIPPED_ALREADY_RECOVERING") }
+            return
         }
+        try {
+            runCatching { Log.w("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=STARTING") }
+            _recoveryState.value = "RECOVERING"
+            invalidate()
 
-        _recoveryState.value = "NORMAL"
-        service?.refreshAudiophileState()
+            val service = com.tensorix.antigravityplayer.player.PlaybackService.instance
+            val sink = service?.activeOboeAudioSink
+            if (sink != null) {
+                val recoveredNative = sink.recoverFromError(errorCode)
+                val resultStr = if (recoveredNative) "RECOVERED_NATIVE" else "RECOVERED_FALLBACK"
+                runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=$resultStr") }
+            }
+
+            service?.refreshAudiophileState()
+        } finally {
+            _recoveryState.value = "NORMAL"
+            recoveryInProgress.set(false)
+        }
     }
+
+    private val recoveryInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
 }

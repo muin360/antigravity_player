@@ -9,14 +9,59 @@
 
 namespace antigravity {
 
-struct PeqBand {
+// ---------------------------------------------------------------------------
+// Concurrency model (see docs/final-forensic-remediation-report.md):
+//
+//  * Scalar parameters live in one POD snapshot (DspParams) exchanged through
+//    a seqlock: the control thread publishes complete updates, the render
+//    thread takes one coherent snapshot per block. No locks on the read path.
+//
+//  * Filter COEFFICIENT changes are queued as commands. The render thread
+//    drains the queue at a block boundary and rebuilds coefficients itself.
+//    A failed try-lock only DELAYS coefficient application - filtering never
+//    stops, so no audio can be dropped while the UI mutates parameters.
+//
+//  * The render thread is the only writer of all filter state (z1/z2),
+//    telemetry accumulators and dither state.
+// ---------------------------------------------------------------------------
+
+struct PeqBandParams {
     bool enabled = true;
     FilterType type = FilterType::PEAKING_EQ;
     double frequency = 1000.0;
     double q = 1.414;
     double gainDb = 0.0;
-    BiquadFilter filterL;
-    BiquadFilter filterR;
+};
+
+struct DspParams {
+    bool enabled = true;
+    bool bitPerfectBypass = false;
+
+    // Neutral-by-default signal chain (Phase 15.4): with no user adjustments
+    // the DSP is bit-transparent apart from DC blocking and the final safety
+    // clamp. Colouration stages are strictly opt-in.
+    double preAmpGainDb = 0.0;
+    double bassBoostGainDb = 0.0;
+    double trebleGainDb = 0.0;
+    double harmonicExciterLevel = 0.0;
+    double clarityEnhancerGainDb = 0.0;
+    double stereoExpansionMultiplier = 1.0;
+    double dvcVolume = 1.0;
+    double ditherStrength = 0.0;
+    int32_t outputBitDepth = 24;
+    double warmSaturationLevel = 0.0;
+    double triodeWarmthLevel = 0.0;
+    double pentodeTapeLevel = 0.0;
+    double crossfeedLevel = 0.0;
+    bool limiterEnabled = false;          // safety ceiling stays via hard clamp
+    double limiterThresholdDb = 0.0;
+    bool subBassMonoEnabled = false;
+    double channelBalance = 0.0;
+    bool invertPhase = false;
+    double airPresenceGainDb = 0.0;
+    bool hrtfSpatialEnabled = false;
+    double hrtfRoomSize = 0.5;
+    double bandGainsDb[10] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 };
 
 class AudiophileDsp {
@@ -27,7 +72,7 @@ public:
     void setSampleRate(double sampleRate);
     void process(float *audioData, int32_t numFrames, int32_t channelCount);
 
-    // Live Parameter Mutators
+    // Live parameter mutators (control thread).
     void setEnabled(bool enabled);
     void setBitPerfectBypass(bool bypass);
     void setPreAmpGainDb(double gainDb);
@@ -58,97 +103,108 @@ public:
     void addPeqBand(FilterType type, double frequency, double q, double gainDb);
     void updatePeqBand(size_t index, FilterType type, double frequency, double q, double gainDb);
 
-    // Telemetry
-    double getPeakL() const { return peakL_.load(); }
-    double getPeakR() const { return peakR_.load(); }
-    float getPhaseCorrelation() const { return phaseCorrelation_.load(); }
-    bool isBitPerfectBypass() const { return isBitPerfectBypass_.load(); }
+    // Telemetry (atomic, safe from any thread)
+    double getPeakL() const { return peakL_.load(std::memory_order_relaxed); }
+    double getPeakR() const { return peakR_.load(std::memory_order_relaxed); }
+    float getPhaseCorrelation() const { return phaseCorrelation_.load(std::memory_order_relaxed); }
+    bool isBitPerfectBypass() const { return bitPerfectBypassFlag_.load(std::memory_order_acquire); }
 
     void reset();
 
 private:
-    void updateFilters();
-    double nextRandomDouble();
+    struct Command {
+        enum class Kind : uint8_t {
+            kSyncCoefficients,   // rebuild every filter from current params
+            kResetState          // clear all filter/delay state
+        };
+        Kind kind = Kind::kSyncCoefficients;
+    };
 
-    std::atomic<bool> isEnabled_{true};
-    std::atomic<bool> isBitPerfectBypass_{false};
-    std::atomic<double> preAmpGainDb_{0.0};
-    std::atomic<double> bassBoostGainDb_{0.0};
-    std::atomic<double> trebleGainDb_{0.0};
-    std::atomic<double> harmonicExciterLevel_{0.25};
-    std::atomic<double> clarityEnhancerGain_{3.5};
-    std::atomic<double> stereoExpansionMultiplier_{1.0};
-    std::atomic<double> dvcVolume_{1.0};
-    std::atomic<double> ditherStrength_{1.0};
-    std::atomic<int> outputBitDepth_{24};
-    std::atomic<double> warmSaturationLevel_{0.05};
-    std::atomic<double> triodeWarmthLevel_{0.05};
-    std::atomic<double> pentodeTapeLevel_{0.0};
-    std::atomic<double> crossfeedLevel_{0.0};
-    std::atomic<bool> limiterEnabled_{true};
-    std::atomic<double> limiterThresholdDb_{0.0};
-    std::atomic<bool> subBassMonoEnabled_{false};
-    std::atomic<double> channelBalance_{0.0};
-    std::atomic<bool> invertPhase_{false};
-    std::atomic<double> airPresenceGainDb_{2.0};
-    std::atomic<bool> hrtfSpatialEnabled_{false};
-    std::atomic<double> hrtfRoomSize_{0.5};
+    static constexpr size_t kNumBands = 10;
+    static constexpr size_t HRTF_BUFFER_SIZE = 2048;
 
-    std::atomic<double> peakL_{0.0};
-    std::atomic<double> peakR_{0.0};
-    std::atomic<float> phaseCorrelation_{1.0f};
+    // ---- Seqlock parameter publisher -------------------------------------
+    template <typename F>
+    void mutateParams(F &&mutator) {
+        std::lock_guard<std::mutex> lk(paramWriteMutex_);
+        const uint32_t s = paramSeq_.load(std::memory_order_relaxed);
+        paramSeq_.store(s + 1u, std::memory_order_release);      // odd: writing
+        mutator(params_);
+        std::atomic_thread_fence(std::memory_order_release);
+        paramSeq_.store(s + 2u, std::memory_order_release);      // even: stable
+        coefficientSyncPending_.store(true, std::memory_order_release);
+    }
 
-    double sampleRate_ = 48000.0;
-    std::array<double, 10> bandGainsDb_{};
-    static constexpr std::array<double, 10> bandCenterFreqs_ = {
+    void readParams(DspParams &out);       // render thread
+    void enqueueCommand(const Command &cmd);
+    void applyCoefficientSync();           // render thread, block boundary
+    void buildFilterSet(double fs);        // render thread, helper of the above
+    void rebuildPeqFilters(const std::vector<PeqBandParams> &specs); // render thread
+    void resetRenderStateOnly();           // render thread (or pre-render ctor)
+    double nextRandomDouble();             // render thread
+    static void configureBiquad(BiquadFilter &f, FilterType type,
+                                double frequency, double q, double gainDb, double fs);
+
+    static constexpr std::array<double, 10> kBandCenterFreqs = {
         31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0
     };
 
-    // Filter Chains
-    std::array<BiquadFilter, 10> biquadsL_;
-    std::array<BiquadFilter, 10> biquadsR_;
-    BiquadFilter bassShelfL_;
-    BiquadFilter bassShelfR_;
-    BiquadFilter trebleShelfL_;
-    BiquadFilter trebleShelfR_;
-    BiquadFilter detailHPFL_;
-    BiquadFilter detailHPFR_;
-    BiquadFilter clarityFilterL_;
-    BiquadFilter clarityFilterR_;
-    BiquadFilter crossfeedLPFL_;
-    BiquadFilter crossfeedLPFR_;
-    BiquadFilter airFilterL_;
-    BiquadFilter airFilterR_;
-    BiquadFilter dcRemovalL_;
-    BiquadFilter dcRemovalR_;
-    BiquadFilter dcBlockerL_;
-    BiquadFilter dcBlockerR_;
-    BiquadFilter aaFilterL_;
-    BiquadFilter aaFilterR_;
-    BiquadFilter subBassFilterL_;
-    BiquadFilter subBassFilterR_;
-    BiquadFilter hrtfHeadShadowL_;
-    BiquadFilter hrtfHeadShadowR_;
-    BiquadFilter hrtfPinnaNotchL_;
-    BiquadFilter hrtfPinnaNotchR_;
+    // ---- Control-side storage --------------------------------------------
+    std::mutex paramWriteMutex_;
+    std::atomic<uint32_t> paramSeq_{0};
+    DspParams params_{};
+    DspParams lastGoodParams_{};           // reader fallback (render thread only)
 
-    std::mutex peqMutex_;
-    std::vector<PeqBand> peqBands_;
+    std::mutex commandMutex_;
+    std::vector<Command> pendingCommands_;
+    std::vector<PeqBandParams> peqDraft_;  // guarded by commandMutex_
 
-    // Oversampling history (Hermite Spline)
+    std::atomic<bool> bitPerfectBypassFlag_{false};
+
+    // ---- Render-thread-owned state ---------------------------------------
+    double sampleRate_ = 48000.0;
+    std::atomic<double> requestedSampleRate_{48000.0};
+    DspParams active_{};                   // last coherent snapshot used
+
+    std::array<BiquadFilter, kNumBands> biquadsL_;
+    std::array<BiquadFilter, kNumBands> biquadsR_;
+    BiquadFilter bassShelfL_, bassShelfR_;
+    BiquadFilter trebleShelfL_, trebleShelfR_;
+    BiquadFilter detailHPFL_, detailHPFR_;
+    BiquadFilter clarityFilterL_, clarityFilterR_;
+    BiquadFilter crossfeedLPFL_, crossfeedLPFR_;
+    BiquadFilter airFilterL_, airFilterR_;
+    BiquadFilter dcRemovalL_, dcRemovalR_;
+    BiquadFilter dcBlockerL_, dcBlockerR_;
+    BiquadFilter aaFilterL_, aaFilterR_;
+    BiquadFilter subBassFilterL_, subBassFilterR_;
+    BiquadFilter hrtfHeadShadowL_, hrtfHeadShadowR_;
+    BiquadFilter hrtfPinnaNotchL_, hrtfPinnaNotchR_;
+
+    std::vector<PeqBandParams> peqActive_;     // copied spec set
+    std::vector<BiquadFilter> peqFiltersL_;    // parallel runtime states
+    std::vector<BiquadFilter> peqFiltersR_;
+
+    // Oversampling history (interpolated waveshaping stage)
     std::array<double, 4> osSamplesL_{};
     std::array<double, 4> osSamplesR_{};
 
-    // HRTF ITD (Interaural Time Delay) Circular Buffers
-    static constexpr size_t HRTF_BUFFER_SIZE = 2048;
+    // HRTF ITD circular buffers
     std::array<double, HRTF_BUFFER_SIZE> itdBufferL_{};
     std::array<double, HRTF_BUFFER_SIZE> itdBufferR_{};
     size_t itdWriteIdx_ = 0;
 
-    // Dither State
+    // Requantization-dither state (render thread only)
     double ditherErrorL_ = 0.0;
     double ditherErrorR_ = 0.0;
     uint64_t rngState_ = 0x853c49e6748fea9bULL;
+
+    // Telemetry
+    std::atomic<double> peakL_{0.0};
+    std::atomic<double> peakR_{0.0};
+    std::atomic<float> phaseCorrelation_{1.0f};
+
+    std::atomic<bool> coefficientSyncPending_{false};
 };
 
 } // namespace antigravity

@@ -34,13 +34,17 @@ import com.tensorix.antigravityplayer.ui.theme.*
 fun MiniPlayer(
     song: Song?,
     isPlaying: Boolean,
-    progressMs: Long,
+    progressMsFlow: kotlinx.coroutines.flow.StateFlow<Long>,
     durationMs: Long,
     onMiniPlayerClick: () -> Unit,
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit
 ) {
     if (song == null) return
+
+    // Phase 22: high-frequency position updates are collected HERE so only
+    // this subtree recomposes on each tick, never the whole application.
+    val progressMs by progressMsFlow.collectAsState()
 
     val progressFraction by animateFloatAsState(
         targetValue = if (durationMs > 0) (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f,

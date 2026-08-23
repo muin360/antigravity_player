@@ -225,16 +225,26 @@ object VendorDacManager {
         )
     }
 
+    // Vendor HAL setParameters is a blocking binder call that can stall for
+    // tens of milliseconds (or hang on broken OEM HALs). Never run it on the
+    // caller's (main) thread during player construction.
+    private val vendorParamExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "VendorDacParams").apply { isDaemon = true }
+    }
+
     fun prepareHardwareForDirectPlayback(context: Context, sampleRate: Int) {
-        if (SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.VIVO)) {
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.VIVO, "direct_pcm", "1")
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.VIVO, "vivo_hifi_state", "1")
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.VIVO, "vivo_headset_hifi", "1")
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.VIVO, "sampling_rate", "$sampleRate")
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.VIVO, "audio_stream_direct", "true")
-        } else if (SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.QUALCOMM)) {
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.QUALCOMM, "direct_pcm", "1")
-            SafeAudioParameterController.setParameter(context, SafeAudioParameterController.TargetVendor.QUALCOMM, "audio_stream_direct", "true")
+        val appContext = context.applicationContext
+        vendorParamExecutor.execute {
+            if (SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.VIVO)) {
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.VIVO, "direct_pcm", "1")
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.VIVO, "vivo_hifi_state", "1")
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.VIVO, "vivo_headset_hifi", "1")
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.VIVO, "sampling_rate", "$sampleRate")
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.VIVO, "audio_stream_direct", "true")
+            } else if (SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.QUALCOMM)) {
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.QUALCOMM, "direct_pcm", "1")
+                SafeAudioParameterController.setParameter(appContext, SafeAudioParameterController.TargetVendor.QUALCOMM, "audio_stream_direct", "true")
+            }
         }
     }
 

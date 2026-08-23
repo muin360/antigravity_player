@@ -39,11 +39,22 @@ class OboeAudioSink(
 
     companion object {
         private const val TAG_LOG = "OboeAudioSink"
+
+        // Native writeDirect/write return contract (see oboe_bridge.cpp):
+        //  >0 : input frames consumed
+        //   0 : transient, retry later
+        //  -1 : stale/closed stream or write error -> AudioEngine recovery
+        //  -2 : unsupported PCM encoding -> permanent fallback to DefaultAudioSink
+        //  -3 : invalid arguments/bounds -> permanent fallback (defensive)
+        private const val RET_ERROR_STALE_OR_WRITE = -1
+        private const val RET_ERROR_UNSUPPORTED_ENCODING = -2
+        private const val RET_ERROR_BAD_ARGUMENTS = -3
+
         @Volatile
         @JvmStatic
         var currentActiveHandle: Long = 0L
             internal set
-        
+
         @Volatile
         @JvmStatic
         var currentStreamInfo: OboeBridge.NativeStreamInfo? = null
@@ -60,7 +71,6 @@ class OboeAudioSink(
     private var listener: AudioSink.Listener? = null
     private var audioAttributes = AudioAttributes.DEFAULT
     private var isPlaying = false
-    private var floatBuffer = FloatArray(8192)
 
     private var startMediaTimeUs: Long = C.TIME_UNSET
     private var isSeekingOrDiscontinuous: Boolean = false
@@ -73,6 +83,11 @@ class OboeAudioSink(
     private var lastSpecifiedBufferSize: Int = 0
     private var lastOutputChannels: IntArray? = null
     private var isFallbackActive: Boolean = false
+
+    // Set permanently when native cannot support the current format; all
+    // subsequent traffic routes to DefaultAudioSink until reset().
+    @Volatile
+    private var nativeUnsupported: Boolean = false
 
     // Fallback sink ONLY used if native Oboe library is missing or device fails native open
     private var fallbackSink: DefaultAudioSink? = null
@@ -107,7 +122,6 @@ class OboeAudioSink(
         }
         return fallbackSink
     }
-
     override fun setListener(listener: AudioSink.Listener) {
         this.listener = listener
         fallbackSink?.setListener(listener)
@@ -147,6 +161,7 @@ class OboeAudioSink(
     private var timeNativeStartedMs: Long = 0L
     private var isFirstFrameWritten: Boolean = false
 
+    @Synchronized
     override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
         timeSinkConfiguredMs = android.os.SystemClock.elapsedRealtime()
         isFirstFrameWritten = false
@@ -172,17 +187,10 @@ class OboeAudioSink(
         channelCount = newChannelCount.coerceAtLeast(1)
         pcmEncoding = newEncoding
 
-        val estimatedSamples = when (pcmEncoding) {
-            C.ENCODING_PCM_FLOAT -> (specifiedBufferSize / 4).coerceAtLeast(channelCount)
-            C.ENCODING_PCM_32BIT -> (specifiedBufferSize / 4).coerceAtLeast(channelCount)
-            C.ENCODING_PCM_24BIT -> (specifiedBufferSize / 3).coerceAtLeast(channelCount)
-            else -> (specifiedBufferSize / 2).coerceAtLeast(channelCount)
-        }
-        if (floatBuffer.size < estimatedSamples) {
-            floatBuffer = FloatArray(estimatedSamples * 2)
-        }
+        // A format change clears any previous unsupported-format verdict.
+        nativeUnsupported = false
 
-        if (streamHandle == 0L && OboeBridge.isAvailable) {
+        if (streamHandle == 0L && OboeBridge.isAvailable && !nativeUnsupported) {
             openOboeStream(preferredDevice?.id ?: 0)
         }
 
@@ -192,22 +200,26 @@ class OboeAudioSink(
             fallback?.configure(inputFormat, specifiedBufferSize, outputChannels)
         }
 
-        runCatching { Log.i(TAG_LOG, "Configured Native Oboe 64-bit Sink: $sampleRate Hz, $channelCount channels, Encoding: $pcmEncoding") }
+        runCatching { Log.i(TAG_LOG, "Configured Native Oboe Sink: $sampleRate Hz, $channelCount channels, Encoding: $pcmEncoding") }
     }
 
     override fun play() {
         isPlaying = true
         timeNativeStartedMs = android.os.SystemClock.elapsedRealtime()
-        if (streamHandle != 0L) {
-            OboeBridge.startStream(streamHandle)
+        synchronized(this) {
+            if (streamHandle != 0L) {
+                OboeBridge.startStream(streamHandle)
+            }
         }
         fallbackSink?.play()
     }
 
     override fun pause() {
         isPlaying = false
-        if (streamHandle != 0L) {
-            OboeBridge.pauseStream(streamHandle)
+        synchronized(this) {
+            if (streamHandle != 0L) {
+                OboeBridge.pauseStream(streamHandle)
+            }
         }
         fallbackSink?.pause()
     }
@@ -219,8 +231,10 @@ class OboeAudioSink(
         startMediaTimeUs = C.TIME_UNSET
         isDraining = false
         runCatching { Log.i("SEEK", "handleDiscontinuity: resetting media clock and flushing stream") }
-        if (streamHandle != 0L) {
-            OboeBridge.flushStream(streamHandle)
+        synchronized(this) {
+            if (streamHandle != 0L) {
+                OboeBridge.flushStream(streamHandle)
+            }
         }
         fallbackSink?.handleDiscontinuity()
     }
@@ -231,24 +245,29 @@ class OboeAudioSink(
         isSeekingOrDiscontinuous = true
         isDraining = false
         runCatching { Log.i("SEEK", "flush: resetting framesWritten=0 and flushing native stream") }
-        if (streamHandle != 0L) {
-            OboeBridge.flushStream(streamHandle)
+        synchronized(this) {
+            if (streamHandle != 0L) {
+                OboeBridge.flushStream(streamHandle)
+            }
         }
         fallbackSink?.flush()
     }
 
+    @Synchronized
     override fun reset() {
         isPlaying = false
         isDraining = false
         framesWritten = 0L
         startMediaTimeUs = C.TIME_UNSET
         isSeekingOrDiscontinuous = false
+        nativeUnsupported = false
         closeOboeStream()
         currentActiveHandle = 0L
         currentStreamInfo = null
         fallbackSink?.reset()
     }
 
+    @Synchronized
     override fun release() {
         closeOboeStream()
         currentActiveHandle = 0L
@@ -269,11 +288,18 @@ class OboeAudioSink(
             return fallbackSink!!.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
         }
 
-        if (streamHandle == 0L) {
-            openOboeStream()
+        synchronized(this) {
             if (streamHandle == 0L) {
-                // Native stream could not be opened; fallback to DefaultAudioSink
-                return getOrCreateFallbackSink()?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+                if (nativeUnsupported || !OboeBridge.isAvailable) {
+                    return getOrCreateFallbackSink()
+                        ?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+                }
+                openOboeStream()
+                if (streamHandle == 0L) {
+                    // Native stream could not be opened; fallback to DefaultAudioSink
+                    return getOrCreateFallbackSink()
+                        ?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+                }
             }
         }
 
@@ -292,74 +318,107 @@ class OboeAudioSink(
             else -> 2
         }
 
-        val sampleCount = remaining / bytesPerSample
+        val bytesPerFrame = channelCount * bytesPerSample
+        if (bytesPerFrame <= 0) return true
+
+        // Drop any sub-frame remainder (< 1 frame): it can never be rendered.
+        val usableBytes = remaining - (remaining % bytesPerFrame)
+        if (usableBytes <= 0) {
+            buffer.position(buffer.limit())
+            return true
+        }
+
+        val sampleCount = usableBytes / bytesPerSample
         val numFrames = sampleCount / channelCount
-        if (numFrames == 0) return true
-
-        val framesWrittenResult = if (buffer.isDirect) {
-            OboeBridge.writeDirect(
-                handle = streamHandle,
-                generation = streamGeneration,
-                directBuffer = buffer,
-                offsetBytes = initialPosition,
-                numBytes = remaining,
-                numFrames = numFrames,
-                pcmEncoding = pcmEncoding,
-                isBitPerfect = bitPerfectMode
-            )
-        } else {
-            if (directByteBuffer.capacity() < remaining) {
-                directByteBuffer = ByteBuffer.allocateDirect(remaining * 2).order(ByteOrder.LITTLE_ENDIAN)
-            }
-            directByteBuffer.clear()
-            val slice = buffer.slice()
-            directByteBuffer.put(slice)
-            directByteBuffer.flip()
-
-            OboeBridge.writeDirect(
-                handle = streamHandle,
-                generation = streamGeneration,
-                directBuffer = directByteBuffer,
-                offsetBytes = 0,
-                numBytes = remaining,
-                numFrames = numFrames,
-                pcmEncoding = pcmEncoding,
-                isBitPerfect = bitPerfectMode
-            )
+        if (numFrames == 0) {
+            buffer.position(initialPosition + usableBytes)
+            return true
         }
 
-        if (framesWrittenResult > 0) {
-            framesWritten += framesWrittenResult
+        val framesWrittenResult = synchronized(this) {
+            if (buffer.isDirect && streamHandle != 0L) {
+                OboeBridge.writeDirect(
+                    handle = streamHandle,
+                    generation = streamGeneration,
+                    directBuffer = buffer,
+                    offsetBytes = initialPosition,
+                    numBytes = usableBytes,
+                    numFrames = numFrames,
+                    pcmEncoding = pcmEncoding,
+                    isBitPerfect = bitPerfectMode
+                )
+            } else if (streamHandle != 0L) {
+                if (directByteBuffer.capacity() < usableBytes) {
+                    directByteBuffer = ByteBuffer.allocateDirect(usableBytes * 2).order(ByteOrder.LITTLE_ENDIAN)
+                }
+                directByteBuffer.clear()
+                val slice = buffer.duplicate()
+                slice.position(initialPosition)
+                slice.limit(initialPosition + usableBytes)
+                directByteBuffer.put(slice)
+                directByteBuffer.flip()
 
-            if (!isFirstFrameWritten) {
-                isFirstFrameWritten = true
-                val now = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(System.currentTimeMillis())
-                val openDelta = (timeNativeOpenedMs - timeSinkConfiguredMs).coerceAtLeast(0)
-                val startDelta = (timeNativeStartedMs - timeNativeOpenedMs).coerceAtLeast(0)
-                val writeDelta = (now - timeNativeStartedMs).coerceAtLeast(0)
-                val totalStartup = (now - timeSinkConfiguredMs).coerceAtLeast(0)
-                runCatching { Log.i("STARTUP_TIMING", "sinkConfigure=${timeSinkConfiguredMs}ms nativeOpen=+${openDelta}ms nativeStart=+${startDelta}ms firstWrite=+${writeDelta}ms total=${totalStartup}ms") }
+                OboeBridge.writeDirect(
+                    handle = streamHandle,
+                    generation = streamGeneration,
+                    directBuffer = directByteBuffer,
+                    offsetBytes = 0,
+                    numBytes = usableBytes,
+                    numFrames = numFrames,
+                    pcmEncoding = pcmEncoding,
+                    isBitPerfect = bitPerfectMode
+                )
+            } else {
+                RET_ERROR_STALE_OR_WRITE
             }
-
-            val bytesPerFrame = channelCount * bytesPerSample
-            val bytesConsumed = framesWrittenResult * bytesPerFrame
-
-            buffer.position((initialPosition + bytesConsumed).coerceAtMost(buffer.limit()))
-            // Return true ONLY when buffer is fully consumed per Media3 contract
-            return !buffer.hasRemaining()
-        } else if (framesWrittenResult == 0) {
-            // Buffer was not consumed this cycle, retry later
-            return false
         }
 
-        // Error code returned by Oboe
-        val errorCode = framesWrittenResult
-        runCatching { Log.w(TAG_LOG, "Oboe write returned error code $errorCode. Delegating recovery to AudioEngine.") }
-        closeOboeStream()
+        when {
+            framesWrittenResult > 0 -> {
+                framesWritten += framesWrittenResult
 
-        AudioEngine.handleStreamError(errorCode, context)
+                if (!isFirstFrameWritten) {
+                    isFirstFrameWritten = true
+                    val now = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(System.currentTimeMillis())
+                    val openDelta = (timeNativeOpenedMs - timeSinkConfiguredMs).coerceAtLeast(0)
+                    val startDelta = (timeNativeStartedMs - timeNativeOpenedMs).coerceAtLeast(0)
+                    val writeDelta = (now - timeNativeStartedMs).coerceAtLeast(0)
+                    val totalStartup = (now - timeSinkConfiguredMs).coerceAtLeast(0)
+                    runCatching { Log.i("STARTUP_TIMING", "sinkConfigure=${timeSinkConfiguredMs}ms nativeOpen=+${openDelta}ms nativeStart=+${startDelta}ms firstWrite=+${writeDelta}ms total=${totalStartup}ms") }
+                }
 
-        return false
+                // Advance by EXACTLY the input frames the native layer reports
+                // consuming; any sub-frame remainder was dropped above.
+                val bytesConsumed = framesWrittenResult * bytesPerFrame
+                buffer.position((initialPosition + bytesConsumed).coerceAtMost(buffer.limit()))
+                // Return true ONLY when buffer is fully consumed per Media3 contract
+                return !buffer.hasRemaining()
+            }
+            framesWrittenResult == 0 -> {
+                // Nothing consumed this cycle; retry later.
+                return false
+            }
+            framesWrittenResult == RET_ERROR_UNSUPPORTED_ENCODING ||
+                framesWrittenResult == RET_ERROR_BAD_ARGUMENTS -> {
+                Log.w(TAG_LOG, "Native sink cannot support format(encoding=$pcmEncoding ch=$channelCount); switching to platform fallback.")
+                closeOboeStream()
+                nativeUnsupported = true
+                val fallback = getOrCreateFallbackSink()
+                lastInputFormat?.let { fmt ->
+                    fallback?.configure(fmt, lastSpecifiedBufferSize, lastOutputChannels)
+                }
+                return fallback?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+            }
+            else -> {
+                // RET_ERROR_STALE_OR_WRITE (-1): delegate recovery to AudioEngine.
+                runCatching { Log.w(TAG_LOG, "Oboe write error $framesWrittenResult. Delegating recovery to AudioEngine.") }
+                closeOboeStream()
+
+                AudioEngine.handleStreamError(framesWrittenResult, context)
+
+                return false
+            }
+        }
     }
 
     override fun playToEndOfStream() {
@@ -432,11 +491,15 @@ class OboeAudioSink(
     }
 
     override fun setVolume(volume: Float) {
+        // Single volume-ownership model (Phase 14):
+        //  - System stream volume: hardware attenuator (always applies).
+        //  - Native DVC software mirror: owned EXCLUSIVELY by the
+        //    PlaybackService system-volume receiver.
+        //  - Player volume (this callback): applies to the fallback sink's
+        //    AudioTrack only; the native path deliberately ignores it so two
+        //    writers can never fight over the same DVC parameter.
         this.volume = if (bitPerfectMode) 1.0f else volume
         fallbackSink?.setVolume(this.volume)
-        if (streamHandle != 0L && !bitPerfectMode) {
-            OboeBridge.setDvcVolume(streamHandle, volume.toDouble())
-        }
     }
 
     @Synchronized
@@ -465,8 +528,12 @@ class OboeAudioSink(
         }
 
         // 3. Open on new physical device
-        if (OboeBridge.isAvailable) {
+        if (OboeBridge.isAvailable && !nativeUnsupported) {
             openOboeStream(targetDeviceId)
+        } else if (nativeUnsupported && fallbackSink == null) {
+            val fallback = getOrCreateFallbackSink()
+            if (isPlaying) fallback?.play()
+            return false
         }
 
         if (streamHandle != 0L) {
@@ -510,6 +577,7 @@ class OboeAudioSink(
         }
     }
 
+    @Synchronized
     fun setBitPerfectMode(enabled: Boolean) {
         if (this.bitPerfectMode != enabled) {
             this.bitPerfectMode = enabled

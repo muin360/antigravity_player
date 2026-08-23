@@ -47,6 +47,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tensorix.antigravityplayer.ai.AiProvider
@@ -310,9 +313,9 @@ fun AiSettingsDialog(
     var keyInput by remember { mutableStateOf("") }
     val modelsForProvider = availableModelsMap[selectedProvider] ?: listOf(
         when (selectedProvider) {
-            AiProvider.GEMINI -> "gemini-1.5-flash"
+            AiProvider.GEMINI -> "gemini-2.0-flash"
             AiProvider.OPENAI -> "gpt-4o-mini"
-            AiProvider.CLAUDE -> "claude-3-5-sonnet-20241022"
+            AiProvider.CLAUDE -> "claude-3-7-sonnet-latest"
             AiProvider.GROQ -> "llama-3.3-70b-versatile"
         }
     )
@@ -371,6 +374,11 @@ fun AiSettingsDialog(
                     onValueChange = { keyInput = it },
                     placeholder = { Text("Paste ${selectedProvider.name} API Key here...", fontSize = 12.sp) },
                     singleLine = true,
+                    // Secret input: masked echo, password keyboard, and the
+                    // value lives only in transient composition state (plain
+                    // remember, NOT rememberSaveable), never in backups.
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = PrimaryCyan),
                     modifier = Modifier.fillMaxWidth()
                 )

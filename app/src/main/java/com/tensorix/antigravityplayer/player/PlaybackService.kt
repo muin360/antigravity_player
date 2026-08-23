@@ -200,16 +200,20 @@ class PlaybackService : MediaSessionService() {
             registerReceiver(becomingNoisyReceiver, noisyFilter)
         }
 
-        // Listen to volume changes for DVC using BroadcastReceiver
+        // Listen to volume changes for DVC using BroadcastReceiver.
+        // Sole owner of the software DVC mirror (see OboeAudioSink.setVolume).
+        // Disabled entirely during BitPerfect: no software gain may touch the
+        // signal in bypass mode.
         volumeReceiver = object : BroadcastReceiver() {
             private var lastSentDvc = -1.0
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == "android.media.VOLUME_CHANGED_ACTION") {
+                    if (_bitPerfectMode.value) return
                     val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                     val dvcVol = (currentVolume.toDouble() / maxVolume.toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
                     dspProcessor.dvcVolume = dvcVol
-                    
+
                     if (Math.abs(dvcVol - lastSentDvc) > 0.001) {
                         lastSentDvc = dvcVol
                         val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
@@ -452,7 +456,10 @@ class PlaybackService : MediaSessionService() {
         val trackChannels = currentTrack.channels.takeIf { it > 0 } ?: 2
 
         val actualSampleRate = audioManager?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: trackSampleRate
-        val actualEncoding = if (!_bitPerfectMode.value && isHiFiSupported()) "ENCODING_PCM_FLOAT (4)" else "ENCODING_PCM_16BIT (2)"
+        // Truthful labelling: these describe the FALLBACK DefaultAudioSink
+        // configuration policy. The active native Oboe path always opens
+        // Float streams and its real format comes from stream telemetry.
+        val fallbackEncoding = if (!_bitPerfectMode.value && isHiFiSupported()) "ENCODING_PCM_FLOAT (4)" else "ENCODING_PCM_16BIT (2)"
         val actualChannels = if (trackChannels == 1) "MONO (1)" else "STEREO (2)"
 
         val verifiedReport = HardwareHiFiVerifier.probeHardwareState(
@@ -464,23 +471,14 @@ class PlaybackService : MediaSessionService() {
 
         val isBitPerfect = _bitPerfectMode.value
         val processorsCount = if (isBitPerfect) 0 else 1
-        val processorsNames = if (isBitPerfect) "[] (Zero AudioProcessors)" else "[Audiophile64BitDspProcessor]"
-        val sinkConfig = if (isBitPerfect) "Integer PCM (16/24-bit) Direct Mode [FloatOutput=false, Processors=0]" else "32-bit Float AudioSink [FloatOutput=true, Processors=1]"
-        val effectsState = if (isBitPerfect) "DETACHED (0 Active Effects / Isolated Session)" else "ATTACHED (Equalizer Session Hook Active)"
-        val eqEngineState = if (isBitPerfect) "RELEASED (All AudioEffect handles = null)" else "ACTIVE (Equalizer/BassBoost/Virtualizer bound)"
-
-        Log.i("AntigravityAudioAudit", "==================== BIT-PERFECT RUNTIME VERIFICATION ====================")
+        Log.i("AntigravityAudioAudit", "==================== AUDIO RUNTIME DIAGNOSTICS ====================")
         Log.i("AntigravityAudioAudit", "1.  BitPerfect Mode Toggle:        ${if (isBitPerfect) "ENABLED (True)" else "DISABLED (False)"}")
-        Log.i("AntigravityAudioAudit", "2.  Active AudioSink Config:       $sinkConfig")
-        Log.i("AntigravityAudioAudit", "3.  Active AudioProcessors Count:  $processorsCount ($processorsNames)")
-        Log.i("AntigravityAudioAudit", "4.  AudioTrack Format Encoding:    $actualEncoding")
-        Log.i("AntigravityAudioAudit", "5.  Audio Session Effects State:   $effectsState")
-        Log.i("AntigravityAudioAudit", "6.  EqualizerEngine Status:        $eqEngineState")
-        Log.i("AntigravityAudioAudit", "7.  Audio Session ID:              $sessionId")
-        Log.i("AntigravityAudioAudit", "8.  Output Sample Rate:            $actualSampleRate Hz")
-        Log.i("AntigravityAudioAudit", "9.  Actual Channel Count:          $actualChannels")
-        Log.i("AntigravityAudioAudit", "10. Active AudioFlinger Thread:    ${verifiedReport.audioThreadType.displayName}")
-        Log.i("AntigravityAudioAudit", "==========================================================================")
+        Log.i("AntigravityAudioAudit", "2.  FallbackSink Config Policy:    $fallbackEncoding, Processors=$processorsCount")
+        Log.i("AntigravityAudioAudit", "3.  Audio Session ID:              $sessionId")
+        Log.i("AntigravityAudioAudit", "4.  Platform Output Rate (inferred): $actualSampleRate Hz")
+        Log.i("AntigravityAudioAudit", "5.  Track Channels (inferred):     $actualChannels")
+        Log.i("AntigravityAudioAudit", "6.  Path Model (inferred):         ${verifiedReport.audioThreadType.displayName}")
+        Log.i("AntigravityAudioAudit", "====================================================================")
     }
 
     private fun buildAndAttachPlayer() {

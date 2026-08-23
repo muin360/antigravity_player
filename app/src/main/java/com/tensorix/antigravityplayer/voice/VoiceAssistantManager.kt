@@ -19,8 +19,15 @@ import java.util.Locale
  */
 class VoiceAssistantManager(private val context: Context) {
 
+    companion object {
+        private const val TAG = "VoiceAssistantManager"
+        private const val LISTEN_TIMEOUT_MS = 15_000L
+    }
+
     private var speechRecognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val listenTimeout = Runnable { stopListeningInternal() }
 
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
@@ -56,9 +63,11 @@ class VoiceAssistantManager(private val context: Context) {
                             _isListening.value = false
                         }
                         override fun onError(error: Int) {
+                            mainHandler.removeCallbacks(listenTimeout)
                             _isListening.value = false
                         }
                         override fun onResults(results: Bundle?) {
+                            mainHandler.removeCallbacks(listenTimeout)
                             _isListening.value = false
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             val spoken = matches?.firstOrNull() ?: ""
@@ -77,9 +86,12 @@ class VoiceAssistantManager(private val context: Context) {
                         override fun onEvent(eventType: Int, params: Bundle?) {}
                     })
                     startListening(intent)
+                    // Safety net: release the microphone even if the provider
+                    // never delivers results or an error callback.
+                    mainHandler.postDelayed(listenTimeout, LISTEN_TIMEOUT_MS)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e(TAG, "Speech recognition start failed", e)
                 _isListening.value = false
                 _recognizedText.value = "Speech recognition error: ${e.localizedMessage}"
             }
@@ -92,12 +104,20 @@ class VoiceAssistantManager(private val context: Context) {
         }
     }
 
+    /** Full teardown (ViewModel.onCleared): no mic session may outlive the app UI. */
+    fun release() {
+        mainHandler.post {
+            stopListeningInternal()
+        }
+    }
+
     private fun stopListeningInternal() {
+        mainHandler.removeCallbacks(listenTimeout)
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.destroy()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w(TAG, "Recognizer teardown warning", e)
         }
         speechRecognizer = null
         _isListening.value = false

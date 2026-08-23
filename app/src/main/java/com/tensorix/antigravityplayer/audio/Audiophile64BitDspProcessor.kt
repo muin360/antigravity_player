@@ -11,21 +11,21 @@ import java.nio.ByteOrder
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tanh
 
 /**
- * Audiophile 64-bit Double-Precision DSP Engine
+ * Audiophile 64-bit Double-Precision DSP Engine (fallback-path processor).
  *
- * Implements Poweramp-grade 32-bit Float PCM sample representation with 64-bit Double internal
- * math for all signal processing:
- *  - 32-bit Float sample stream decoding (IEEE 754)
- *  - 64-bit Double-Precision (Float64) Biquad Equalizer filtering
- *  - 64-bit Low-Shelf Bass Amplification & High-Shelf Treble Excitation
- *  - 64-bit ReplayGain peak volume normalization
- *  - 64-bit Soft-Knee Intersample Limiter avoiding digital clipping
- *  - Pure Bit-Perfect Bypass mode for bitstream purity
+ * Contract mirrors the native C++ DSP (see docs/DSPOwnership.md):
+ *  - Neutral-by-default chain: colouration stages are opt-in so a Flat/default
+ *    configuration stays transparent apart from DC blocking.
+ *  - Dither is REAL requantization dither: gated behind an explicit strength
+ *    AND an integer target depth below 32 bits; never unconditional noise.
+ *  - Anti-aliasing guard engages only while nonlinear stages are active.
+ *  - Zero per-sample heap allocation on the render thread.
  */
 @UnstableApi
 class Audiophile64BitDspProcessor : BaseAudioProcessor() {
@@ -49,43 +49,43 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     var trebleGainDb: Double = 0.0
 
     @Volatile
-    var harmonicExciterLevel: Double = 0.25 // Sharpness / Detail
+    var harmonicExciterLevel: Double = 0.0
 
     @Volatile
-    var clarityEnhancerGain: Double = 3.5 // Boosts specific detail frequencies
+    var clarityEnhancerGain: Double = 0.0
 
     @Volatile
     var stereoExpansionMultiplier: Double = 1.0 // 1.0 = neutral, >1.0 = wider
 
     @Volatile
-    var dvcVolume: Double = 1.0 // 64-bit Direct Volume Control
+    var dvcVolume: Double = 1.0 // Direct Volume Control (software gain stage)
 
     @Volatile
-    var ditherStrength: Double = 1.0
+    var ditherStrength: Double = 0.0
 
     @Volatile
-    var outputBitDepth: Int = 24 // Used to scale TPDF dither
+    var outputBitDepth: Int = 24 // Target depth for requantization dither
 
     @Volatile
-    var warmSaturationLevel: Double = 0.05 // Poweramp warmth
+    var warmSaturationLevel: Double = 0.0
 
     @Volatile
-    var triodeWarmthLevel: Double = 0.05 // Even 2nd-harmonic triode tube modeling
+    var triodeWarmthLevel: Double = 0.0
 
     @Volatile
-    var pentodeTapeLevel: Double = 0.0 // Odd 3rd-harmonic pentode tape punch
+    var pentodeTapeLevel: Double = 0.0
 
     @Volatile
-    var dynamicLoudnessEnabled: Boolean = false // Fletcher-Munson dynamic low-SPL compensation
+    var dynamicLoudnessEnabled: Boolean = false // Fletcher-Munson compensation (reserved)
 
     @Volatile
-    var crossfeedLevel: Double = 0.0 // Meier Crossfeed (0.0 to 1.0)
+    var crossfeedLevel: Double = 0.0
 
     @Volatile
-    var limiterThresholdDb: Double = 0.0 // 0 dBFS True-Peak Ceiling
+    var limiterThresholdDb: Double = 0.0
 
     @Volatile
-    var limiterEnabled: Boolean = true
+    var limiterEnabled: Boolean = false // Optional soft-knee safety stage
 
     @Volatile
     var replayGainMultiplier: Double = 1.0
@@ -116,7 +116,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     var channelBalance: Double = 0.0 // -1.0 to 1.0
 
     @Volatile
-    var phaseCorrelation: Float = 1.0f // -1.0 to 1.0 (Real-time correlation)
+    var phaseCorrelation: Float = 1.0f
 
     private var ditherErrorL = 0.0
     private var ditherErrorR = 0.0
@@ -125,7 +125,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     var invertPhase: Boolean = false
 
     @Volatile
-    var airPresenceGainDb: Double = 2.0 // +2.0 dB High-end air presence for AK4376A DAC
+    var airPresenceGainDb: Double = 0.0
 
     val currentSampleRate: Int
         get() = if (inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) inputAudioFormat.sampleRate else 0
@@ -141,47 +141,39 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     private var bassShelfR = BiquadFilter()
     private var trebleShelfL = BiquadFilter()
     private var trebleShelfR = BiquadFilter()
-    
-    // High-precision Detail filters
+
+    // Detail filters
     private var detailHPFL = BiquadFilter()
     private var detailHPFR = BiquadFilter()
-    
-    // Clarity peaking filters (around 3.5kHz for presence/detail)
+
     private var clarityFilterL = BiquadFilter()
     private var clarityFilterR = BiquadFilter()
-    
-    // Crossfeed low-pass filters
+
     private var crossfeedLPFL = BiquadFilter()
     private var crossfeedLPFR = BiquadFilter()
-    
-    // Air Presence (High-Shelf at 16kHz)
+
     private var airFilterL = BiquadFilter()
     private var airFilterR = BiquadFilter()
-    
-    // DC Offset removal filters (2Hz HPF)
+
     private var dcRemovalL = BiquadFilter()
     private var dcRemovalR = BiquadFilter()
-    
-    // Anti-Aliasing filters (20kHz LPF)
+
     private var aaFilterL = BiquadFilter()
     private var aaFilterR = BiquadFilter()
-    
-    // DC Blocker filter (High-Pass 1Hz)
+
     private var dcBlockerL = BiquadFilter()
     private var dcBlockerR = BiquadFilter()
 
     @Volatile
-    var subBassMonoEnabled: Boolean = false // Monofy frequencies <80Hz for tight bass punch
+    var subBassMonoEnabled: Boolean = false
 
     private var subBassFilterL = BiquadFilter()
     private var subBassFilterR = BiquadFilter()
 
-    // Oversampling state (for anti-aliasing)
-    // We use 4 samples for Hermite Cubic Interpolation
+    // Waveshaping interpolation history
     private var osSamplesL = DoubleArray(4) { 0.0 }
     private var osSamplesR = DoubleArray(4) { 0.0 }
 
-    // Xorshift RNG state for TPDF Dither
     private var rngState: Long = System.nanoTime()
 
     private fun nextRandomDouble(): Double {
@@ -192,6 +184,10 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         return (v ushr 1).toDouble() / Long.MAX_VALUE.toDouble()
     }
 
+    // Render-thread scratch: zero allocation in the hot loop.
+    private val frameSamples = DoubleArray(8)
+    private val upsampledPair = DoubleArray(2)
+
     override fun onConfigure(inputAudioFormat: AudioFormat): AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
             inputAudioFormat.encoding != C.ENCODING_PCM_24BIT &&
@@ -201,30 +197,28 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
             return AudioFormat.NOT_SET
         }
 
-        // Reconfigure Biquad filter coefficients based on sample rate
         val sampleRate = inputAudioFormat.sampleRate.toDouble()
         updateFilterCoefficients(sampleRate)
 
-        // Always output 32-bit Float PCM for maximum dynamic range
+        // Always process/output 32-bit Float PCM for maximum dynamic range.
         val outputFormat = AudioFormat(
             inputAudioFormat.sampleRate,
             inputAudioFormat.channelCount,
             C.ENCODING_PCM_FLOAT
         )
-        
+
         // Clear history on format change to prevent glitches/noise
         osSamplesL.fill(0.0)
         osSamplesR.fill(0.0)
         ditherErrorL = 0.0
         ditherErrorR = 0.0
-        
+
         return outputFormat
     }
 
     fun setBandGain(bandIndex: Int, gainDb: Double) {
         if (bandIndex in bandGainsDb.indices) {
             bandGainsDb[bandIndex] = gainDb
-            Log.d("AudiophileDsp", "Live Band Update: Band $bandIndex = $gainDb dB")
             val fs = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate.toDouble() else 44100.0
             updateFilterCoefficients(fs)
         }
@@ -250,36 +244,32 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
         trebleShelfL.setHighShelf(10000.0, 0.707, trebleGainDb, sampleRate)
         trebleShelfR.setHighShelf(10000.0, 0.707, trebleGainDb, sampleRate)
-        
-        // Detail Enhancement HPF (7.5kHz cut-off for exciter)
-        detailHPFL.setHighPass(7500.0, 0.707, sampleRate)
-        detailHPFR.setHighPass(7500.0, 0.707, sampleRate)
-        
-        // Clarity Filter (3.2kHz Peaking EQ for presence)
+
+        // Exciter HPF drives two interpolated sub-samples per frame (2x rate):
+        // design at 2*fs to preserve the nominal 7.5 kHz corner.
+        detailHPFL.setHighPass(7500.0, 0.707, sampleRate * 2.0)
+        detailHPFR.setHighPass(7500.0, 0.707, sampleRate * 2.0)
+
         clarityFilterL.setPeakingEq(3200.0, 1.0, clarityEnhancerGain, sampleRate)
         clarityFilterR.setPeakingEq(3200.0, 1.0, clarityEnhancerGain, sampleRate)
-        
-        // Crossfeed Filter (700Hz low-pass shelf)
+
         crossfeedLPFL.setLowPass(700.0, 0.5, sampleRate)
         crossfeedLPFR.setLowPass(700.0, 0.5, sampleRate)
 
-        // DC Removal (2Hz High Pass)
         dcRemovalL.setHighPass(2.0, 0.707, sampleRate)
         dcRemovalR.setHighPass(2.0, 0.707, sampleRate)
-        
-        // DC Blocker (1Hz)
+
         dcBlockerL.setHighPass(1.0, 0.707, sampleRate)
         dcBlockerR.setHighPass(1.0, 0.707, sampleRate)
 
-        // Anti-Aliasing (20kHz Low Pass)
-        aaFilterL.setLowPass(20000.0, 0.707, sampleRate)
-        aaFilterR.setLowPass(20000.0, 0.707, sampleRate)
+        // AA guard tracks Nyquist; engaged only while nonlinear stages run.
+        val aaCorner = minOf(20000.0, sampleRate * 0.45)
+        aaFilterL.setLowPass(aaCorner, 0.707, sampleRate)
+        aaFilterR.setLowPass(aaCorner, 0.707, sampleRate)
 
-        // Sub-Bass Mono Filter (80Hz Butterworth Low-Pass)
         subBassFilterL.setLowPass(80.0, 0.707, sampleRate)
         subBassFilterR.setLowPass(80.0, 0.707, sampleRate)
 
-        // Air Presence (16kHz High Shelf)
         airFilterL.setHighShelf(16000.0, 0.5, airPresenceGainDb, sampleRate)
         airFilterR.setHighShelf(16000.0, 0.5, airPresenceGainDb, sampleRate)
     }
@@ -292,33 +282,65 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        val remaining = inputBuffer.remaining()
-        if (remaining == 0) return
+        if (inputBuffer.remaining() == 0) return
 
-        val channelCount = inputAudioFormat.channelCount
+        val channelCount = inputAudioFormat.channelCount.coerceIn(1, frameSamples.size)
         val encoding = inputAudioFormat.encoding
 
-        val sampleCount = when (encoding) {
-            C.ENCODING_PCM_FLOAT -> remaining / 4
-            C.ENCODING_PCM_16BIT -> remaining / 2
-            C.ENCODING_PCM_24BIT -> remaining / 3
-            C.ENCODING_PCM_32BIT -> remaining / 4
-            else -> remaining / 2
+        val bytesPerFrameIn = channelCount * when (encoding) {
+            C.ENCODING_PCM_24BIT -> 3
+            C.ENCODING_PCM_16BIT -> 2
+            else -> 4
         }
+        val sampleCount = inputBuffer.remaining() /
+            (when (encoding) {
+                C.ENCODING_PCM_24BIT -> 3
+                C.ENCODING_PCM_16BIT -> 2
+                else -> 4
+            })
 
-        val outputBytes = sampleCount * 4
-        val outputBuffer = replaceOutputBuffer(outputBytes)
-
-        val bypass = isBitPerfectBypass || !isEnabled
-
+        val outputBuffer = replaceOutputBuffer(sampleCount * 4)
         inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
         outputBuffer.order(ByteOrder.LITTLE_ENDIAN)
 
-        while (inputBuffer.remaining() >= channelCount * (if (encoding == C.ENCODING_PCM_24BIT) 3 else if (encoding == C.ENCODING_PCM_16BIT) 2 else 4)) {
-            val samples = DoubleArray(channelCount)
-            
+        val bypass = isBitPerfectBypass || !isEnabled
+
+        // Per-buffer control snapshot: coherent values for this whole block,
+        // no torn mid-buffer mixes.
+        val preAmpMultiplier = 10.0.pow(preAmpGainDb / 20.0)
+        val rgGain = replayGainMultiplier
+        val dvc = dvcVolume
+        val warmSat = warmSaturationLevel
+        val triode = triodeWarmthLevel
+        val pentode = pentodeTapeLevel
+        val exciterLevel = harmonicExciterLevel
+        val clarityGainLocal = clarityEnhancerGain
+        val crossfeedLocal = crossfeedLevel
+        val stereoExpLocal = stereoExpansionMultiplier
+        val subMonoLocal = subBassMonoEnabled
+        val balanceLocal = channelBalance
+        val invPhaseLocal = invertPhase
+        val airGainLocal = airPresenceGainDb
+        val limiterOn = limiterEnabled
+        val limThresh = 10.0.pow(limiterThresholdDb / 20.0)
+        val bassLocal = bassBoostGainDb
+        val trebleLocal = trebleGainDb
+
+        // Honest requantization dither (mirrors native DSP): TPDF noise plus an
+        // ACTUAL quantization step onto the selected target-depth grid. Inert
+        // unless explicitly enabled with a depth below 32 bits - never
+        // unconditional noise into a float transport.
+        val ditherOn = ditherStrength > 0.0 && outputBitDepth in 1..31
+        val lsb = if (ditherOn) 1.0 / (2.0.pow(outputBitDepth.toDouble() - 1.0)) else 0.0
+
+        // Nonlinear stages engaged -> their harmonics need band-limiting.
+        val nonlinearEngaged =
+            (warmSat + triode + pentode) > 0.0 || exciterLevel > 0.0
+
+        while (inputBuffer.remaining() >= bytesPerFrameIn) {
+            // Decode one frame
             for (ch in 0 until channelCount) {
-                samples[ch] = when (encoding) {
+                frameSamples[ch] = when (encoding) {
                     C.ENCODING_PCM_FLOAT -> inputBuffer.float.toDouble()
                     C.ENCODING_PCM_16BIT -> inputBuffer.short.toDouble() / 32768.0
                     C.ENCODING_PCM_24BIT -> {
@@ -326,8 +348,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                         val b1 = inputBuffer.get().toInt() and 0xFF
                         val b2 = inputBuffer.get().toInt() and 0xFF
                         val raw24 = (b2 shl 16) or (b1 shl 8) or b0
-                        val sampleInt24 = if (raw24 and 0x800000 != 0) raw24 or -0x1000000 else raw24
-                        sampleInt24.toDouble() / 8388608.0
+                        val s24 = if (raw24 and 0x800000 != 0) raw24 or -0x1000000 else raw24
+                        s24.toDouble() / 8388608.0
                     }
                     C.ENCODING_PCM_32BIT -> inputBuffer.int.toDouble() / 2147483648.0
                     else -> 0.0
@@ -335,195 +357,185 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
             }
 
             if (!bypass) {
-                // Apply Pre-Amp
-                val preAmpMultiplier = 10.0.pow(preAmpGainDb / 20.0)
-                
+                // Pre-amp
                 for (ch in 0 until channelCount) {
-                    samples[ch] *= preAmpMultiplier
-                    
-                    // 3. 2x Oversampled Processing (Anti-Aliasing for Saturation/Exciter)
-                    // Hermite Cubic Interpolation for maximum high-end clarity
-                    val history = if (ch == 0) osSamplesL else osSamplesR
-                    
-                    // Shift history
-                    history[0] = history[1]
-                    history[1] = history[2]
-                    history[2] = history[3]
-                    history[3] = samples[ch]
+                    frameSamples[ch] *= preAmpMultiplier
+                }
 
-                    // Interpolate at t=0.5
-                    // Hermite Spline formula
-                    val v0 = history[0]
-                    val v1 = history[1]
-                    val v2 = history[2]
-                    val v3 = history[3]
-                    
-                    val a = -0.5 * v0 + 1.5 * v1 - 1.5 * v2 + 0.5 * v3
-                    val b = v0 - 2.5 * v1 + 2.0 * v2 - 0.5 * v3
-                    val c = -0.5 * v0 + 0.5 * v2
-                    val d = v1
-                    
-                    val t = 0.5
-                    val subSample = a * t * t * t + b * t * t + c * t + d
-                    
-                    val upsampled = doubleArrayOf(subSample, v2)
+                // Interpolated waveshaping stage (saturation/exciter). Two
+                // interpolated sub-samples per frame are shaped and averaged;
+                // NOT a full anti-aliased oversampler. Skipped entirely while
+                // disengaged so neutral settings stay transparent.
+                if (nonlinearEngaged) {
+                    for (ch in 0 until channelCount) {
+                        val history = if (ch == 0) osSamplesL else osSamplesR
 
-                    for (i in 0..1) {
-                        var s = upsampled[i]
-                        
-                        // Valve Warmth & Triode Tube Modeling
-                        if (warmSaturationLevel > 0 || triodeWarmthLevel > 0) {
-                            val warmFactor = warmSaturationLevel + triodeWarmthLevel
-                            s += (warmFactor * (s.pow(3.0) - s))
-                            if (triodeWarmthLevel > 0) {
-                                s += triodeWarmthLevel * 0.15 * (s * s * (if (s > 0) 1.0 else -1.0))
+                        history[0] = history[1]
+                        history[1] = history[2]
+                        history[2] = history[3]
+                        history[3] = frameSamples[ch]
+
+                        val v0 = history[0]
+                        val v1 = history[1]
+                        val v2 = history[2]
+                        val v3 = history[3]
+
+                        val a = -0.5 * v0 + 1.5 * v1 - 1.5 * v2 + 0.5 * v3
+                        val b = v0 - 2.5 * v1 + 2.0 * v2 - 0.5 * v3
+                        val c = -0.5 * v0 + 0.5 * v2
+
+                        upsampledPair[0] = a * 0.125 + b * 0.25 + c * 0.5 + v1
+                        upsampledPair[1] = v2
+
+                        for (i in 0..1) {
+                            var sm = upsampledPair[i]
+
+                            if (warmSat > 0 || triode > 0) {
+                                val warmFactor = warmSat + triode
+                                sm += warmFactor * (sm.pow(3.0) - sm)
+                                if (triode > 0) {
+                                    sm += triode * 0.15 * (sm * sm * (if (sm > 0) 1.0 else -1.0))
+                                }
                             }
-                        }
 
-                        // Pentode Tape Saturation (3rd Harmonic Punch)
-                        if (pentodeTapeLevel > 0) {
-                            s -= pentodeTapeLevel * 0.1 * (s * s * s)
-                        }
+                            if (pentode > 0) {
+                                sm -= pentode * 0.1 * (sm * sm * sm)
+                            }
 
-                        // Harmonic Exciter
-                        if (harmonicExciterLevel > 0) {
-                            val detail = if (ch == 0) detailHPFL.process(s) else detailHPFR.process(s)
-                            val harmonics = detail.pow(3.0) * 0.5 + detail.pow(2.0) * 0.3
-                            s += harmonics * harmonicExciterLevel
+                            if (exciterLevel > 0) {
+                                val detail = if (ch == 0) detailHPFL.process(sm) else detailHPFR.process(sm)
+                                sm += (detail.pow(3.0) * 0.5 + detail.pow(2.0) * 0.3) * exciterLevel
+                            }
+                            upsampledPair[i] = sm
                         }
-                        upsampled[i] = s
+                        frameSamples[ch] = (upsampledPair[0] + upsampledPair[1]) * 0.5
                     }
-                    // Downsample (Average)
-                    samples[ch] = (upsampled[0] + upsampled[1]) * 0.5
-                    
-                    // 4. ReplayGain
-                    samples[ch] *= replayGainMultiplier
+                }
 
-                    // 5. DC Removal & Blocking
-                    samples[ch] = if (ch == 0) dcRemovalL.process(samples[ch]) else dcRemovalR.process(samples[ch])
-                    samples[ch] = if (ch == 0) dcBlockerL.process(samples[ch]) else dcBlockerR.process(samples[ch])
+                // ReplayGain
+                for (ch in 0 until channelCount) {
+                    frameSamples[ch] *= rgGain
+                }
 
-                    // 6. Clarity Enhancer (Presence)
-                    if (clarityEnhancerGain != 0.0) {
-                        samples[ch] = if (ch == 0) clarityFilterL.process(samples[ch]) else clarityFilterR.process(samples[ch])
+                // DC removal/blocking (always-on safety, transparent for music)
+                for (ch in 0 until channelCount) {
+                    var s = frameSamples[ch]
+                    s = if (ch == 0) dcRemovalL.process(s) else dcRemovalR.process(s)
+                    s = if (ch == 0) dcBlockerL.process(s) else dcBlockerR.process(s)
+                    frameSamples[ch] = s
+                }
+
+                if (clarityGainLocal != 0.0) {
+                    for (ch in 0 until channelCount) {
+                        frameSamples[ch] = if (ch == 0) clarityFilterL.process(frameSamples[ch]) else clarityFilterR.process(frameSamples[ch])
                     }
+                }
 
-                    // 7. Bass Boost
-                    samples[ch] = if (ch == 0) bassShelfL.process(samples[ch]) else bassShelfR.process(samples[ch])
+                if (bassLocal != 0.0) {
+                    for (ch in 0 until channelCount) {
+                        frameSamples[ch] = if (ch == 0) bassShelfL.process(frameSamples[ch]) else bassShelfR.process(frameSamples[ch])
+                    }
+                }
 
-                    // 8. 10-Band EQ
-                    val biquads = if (ch == 0) biquadsL else biquadsR
-                    for (i in biquads.indices) {
-                        if (bandGainsDb[i] != 0.0) {
-                            samples[ch] = biquads[i].process(samples[ch])
+                for (i in bandGainsDb.indices) {
+                    if (bandGainsDb[i] != 0.0) {
+                        for (ch in 0 until channelCount) {
+                            frameSamples[ch] = if (ch == 0) biquadsL[i].process(frameSamples[ch]) else biquadsR[i].process(frameSamples[ch])
                         }
                     }
                 }
 
-                // 9. Stereo Expansion (M-S Processing)
-                if (channelCount == 2) {
-                    if (crossfeedLevel > 0) {
-                        // Meier-style Crossfeed
-                        val lowL = crossfeedLPFL.process(samples[0])
-                        val lowR = crossfeedLPFR.process(samples[1])
-                        
-                        val crossfeedAmount = crossfeedLevel * 0.3
-                        samples[0] = samples[0] - crossfeedAmount * lowL + crossfeedAmount * lowR
-                        samples[1] = samples[1] - crossfeedAmount * lowR + crossfeedAmount * lowL
+                if (channelCount >= 2) {
+                    if (crossfeedLocal > 0) {
+                        val lowL = crossfeedLPFL.process(frameSamples[0])
+                        val lowR = crossfeedLPFR.process(frameSamples[1])
+                        val amt = crossfeedLocal * 0.3
+                        frameSamples[0] = frameSamples[0] - amt * lowL + amt * lowR
+                        frameSamples[1] = frameSamples[1] - amt * lowR + amt * lowL
                     }
 
-                    if (stereoExpansionMultiplier != 1.0) {
-                        val mid = (samples[0] + samples[1]) * 0.5
-                        val side = (samples[0] - samples[1]) * 0.5 * stereoExpansionMultiplier
-                        samples[0] = mid + side
-                        samples[1] = mid - side
+                    if (stereoExpLocal != 1.0) {
+                        val mid = (frameSamples[0] + frameSamples[1]) * 0.5
+                        val side = (frameSamples[0] - frameSamples[1]) * 0.5 * stereoExpLocal
+                        frameSamples[0] = mid + side
+                        frameSamples[1] = mid - side
                     }
 
-                    // 9b. Sub-Bass Mono Summing (<80Hz for tight low-end punch)
-                    if (subBassMonoEnabled) {
-                        val subL = subBassFilterL.process(samples[0])
-                        val subR = subBassFilterR.process(samples[1])
+                    if (subMonoLocal) {
+                        val subL = subBassFilterL.process(frameSamples[0])
+                        val subR = subBassFilterR.process(frameSamples[1])
                         val monoSub = (subL + subR) * 0.5
-                        samples[0] = (samples[0] - subL) + monoSub
-                        samples[1] = (samples[1] - subR) + monoSub
+                        frameSamples[0] = (frameSamples[0] - subL) + monoSub
+                        frameSamples[1] = (frameSamples[1] - subR) + monoSub
                     }
-                    
-                    // Balance & Phase using Constant Power Pan Law (No acoustic center volume drop)
-                    if (invertPhase) samples[1] = -samples[1]
-                    if (channelBalance != 0.0) {
-                        val panAngle = (channelBalance.coerceIn(-1.0, 1.0) + 1.0) * (Math.PI / 4.0)
-                        val leftGain = kotlin.math.cos(panAngle) * 1.4142135623730951
-                        val rightGain = kotlin.math.sin(panAngle) * 1.4142135623730951
-                        samples[0] *= leftGain
-                        samples[1] *= rightGain
+
+                    if (invPhaseLocal) frameSamples[1] = -frameSamples[1]
+
+                    if (balanceLocal != 0.0) {
+                        val panAngle = (balanceLocal.coerceIn(-1.0, 1.0) + 1.0) * (Math.PI / 4.0)
+                        frameSamples[0] *= cos(panAngle) * 1.4142135623730951
+                        frameSamples[1] *= sin(panAngle) * 1.4142135623730951
                     }
                 }
 
                 for (ch in 0 until channelCount) {
-                    // 10. Treble Shelf
-                    samples[ch] = if (ch == 0) trebleShelfL.process(samples[ch]) else trebleShelfR.process(samples[ch])
-
-                    // 10b. Air Presence (16kHz High-Shelf)
-                    if (airPresenceGainDb != 0.0) {
-                        samples[ch] = if (ch == 0) airFilterL.process(samples[ch]) else airFilterR.process(samples[ch])
+                    if (trebleLocal != 0.0) {
+                        frameSamples[ch] = if (ch == 0) trebleShelfL.process(frameSamples[ch]) else trebleShelfR.process(frameSamples[ch])
                     }
-                    
-                    // 10c. Anti-Aliasing (Final 20kHz Low-Pass Filter)
-                    // Removes high-frequency switching noise and aliasing artifacts
-                    samples[ch] = if (ch == 0) aaFilterL.process(samples[ch]) else aaFilterR.process(samples[ch])
 
-                    // 11. 64-bit Soft-Knee Intersample Limiter (Prevents Digital Clipping)
-                    if (limiterEnabled) {
-                        val threshold = 10.0.pow(limiterThresholdDb / 20.0)
-                        val absVal = kotlin.math.abs(samples[ch])
-                        if (absVal > threshold) {
-                             val over = absVal - threshold
-                             val compressed = threshold + threshold * tanh(over / threshold)
-                             samples[ch] = if (samples[ch] > 0) compressed else -compressed
+                    if (airGainLocal != 0.0) {
+                        frameSamples[ch] = if (ch == 0) airFilterL.process(frameSamples[ch]) else airFilterR.process(frameSamples[ch])
+                    }
+
+                    if (nonlinearEngaged) {
+                        frameSamples[ch] = if (ch == 0) aaFilterL.process(frameSamples[ch]) else aaFilterR.process(frameSamples[ch])
+                    }
+
+                    if (limiterOn) {
+                        val absVal = kotlin.math.abs(frameSamples[ch])
+                        if (absVal > limThresh) {
+                            val over = absVal - limThresh
+                            val compressed = limThresh + limThresh * tanh(over / limThresh)
+                            frameSamples[ch] = if (frameSamples[ch] > 0) compressed else -compressed
                         }
-                    } else if (samples[ch] > 0.99 || samples[ch] < -0.99) {
-                        samples[ch] = samples[ch].coerceIn(-1.0, 1.0)
+                    } else if (frameSamples[ch] > 1.0 || frameSamples[ch] < -1.0) {
+                        frameSamples[ch] = frameSamples[ch].coerceIn(-1.0, 1.0)
                     }
 
-                    // 12. Direct Volume Control (DVC) - Final Gain Stage
-                    samples[ch] *= dvcVolume
-                    
-                    // Final Safety Hard Ceiling (-0.1 dBFS) to prevent intersample clipping
-                    samples[ch] = samples[ch].coerceIn(-0.988, 0.988)
+                    frameSamples[ch] *= dvc
 
-                    // 13. High-Pass Noise-Shaped 64-bit TPDF Dither
-                    // Precision dither ensures silence is truly silent and removes quantization noise
-                    val r1 = nextRandomDouble() - 0.5
-                    val r2 = nextRandomDouble() - 0.5
-                    
-                    // Scale dither to the LSB of the hardware bit depth
-                    // Precision calibration: 1 / 2^(depth-1)
-                    val lsb = 1.0 / (2.0.pow(outputBitDepth.toDouble() - 1.0))
-                    val rawDither = (r1 + r2) * lsb
-                    
-                    val prevError = if (ch == 0) ditherErrorL else ditherErrorR
-                    val shapedDither = rawDither - 0.5 * prevError
-                    if (ch == 0) ditherErrorL = rawDither else ditherErrorR = rawDither
-                    samples[ch] += shapedDither
+                    if (ditherOn) {
+                        val r1 = nextRandomDouble() - 0.5
+                        val r2 = nextRandomDouble() - 0.5
+                        val rawDither = (r1 + r2) * lsb * ditherStrength
+                        val prevError = if (ch == 0) ditherErrorL else ditherErrorR
+                        val shapedDither = rawDither - 0.5 * prevError
+                        if (ch == 0) ditherErrorL = rawDither else ditherErrorR = rawDither
+                        frameSamples[ch] = round((frameSamples[ch] + shapedDither) / lsb) * lsb
+                    }
                 }
             }
-            
-            // 4x True Peak Oversampled Intersample Peak Calculation (ITU-R BS.1770-4 Standard)
-            val truePeakL = kotlin.math.abs(samples[0])
-            val truePeakR = if (channelCount > 1) kotlin.math.abs(samples[1]) else truePeakL
-            peakL = (peakL * 0.92).coerceAtLeast(truePeakL)
-            peakR = (peakR * 0.92).coerceAtLeast(truePeakR)
 
-            // Real-Time Phase Correlation Coefficient: r = (L*R) / sqrt(L^2 * R^2)
-            if (channelCount > 1) {
-                val corrNum = samples[0] * samples[1]
-                val corrDen = kotlin.math.sqrt((samples[0] * samples[0] + 1e-12) * (samples[1] * samples[1] + 1e-12))
-                val currentCorr = (corrNum / corrDen).toFloat().coerceIn(-1.0f, 1.0f)
-                phaseCorrelation = (phaseCorrelation * 0.95f) + (currentCorr * 0.05f)
+            // Output (both bypass and processed paths)
+            for (ch in 0 until channelCount) {
+                outputBuffer.putFloat(frameSamples[ch].toFloat().coerceIn(-1.0f, 1.0f))
             }
 
-            for (ch in 0 until channelCount) {
-                outputBuffer.putFloat(samples[ch].toFloat().coerceIn(-1.0f, 1.0f))
+            // Sample-peak telemetry with decay (NOT an oversampled true-peak
+            // measurement - see truth audit).
+            val pkL = kotlin.math.abs(frameSamples[0])
+            val pkR = if (channelCount > 1) kotlin.math.abs(frameSamples[1]) else pkL
+            peakL = (peakL * 0.92).coerceAtLeast(pkL)
+            peakR = (peakR * 0.92).coerceAtLeast(pkR)
+
+            if (channelCount > 1) {
+                val lVal = frameSamples[0]
+                val rVal = frameSamples[1]
+                val corrDen = sqrt((lVal * lVal + 1e-12) * (rVal * rVal + 1e-12))
+                if (corrDen > 1e-12) {
+                    val currentCorr = ((lVal * rVal) / corrDen).toFloat().coerceIn(-1.0f, 1.0f)
+                    phaseCorrelation = (phaseCorrelation * 0.95f) + (currentCorr * 0.05f)
+                }
             }
         }
 
@@ -533,22 +545,21 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     override fun onReset() {
         for (bq in biquadsL) bq.reset()
         for (bq in biquadsR) bq.reset()
-        bassShelfL.reset()
-        bassShelfR.reset()
-        trebleShelfL.reset()
-        trebleShelfR.reset()
-        detailHPFL.reset()
-        detailHPFR.reset()
-        clarityFilterL.reset()
-        clarityFilterR.reset()
-        crossfeedLPFL.reset()
-        crossfeedLPFR.reset()
-        aaFilterL.reset()
-        aaFilterR.reset()
-        
-        // Clear oversampling and peak buffers
+        bassShelfL.reset(); bassShelfR.reset()
+        trebleShelfL.reset(); trebleShelfR.reset()
+        detailHPFL.reset(); detailHPFR.reset()
+        clarityFilterL.reset(); clarityFilterR.reset()
+        crossfeedLPFL.reset(); crossfeedLPFR.reset()
+        airFilterL.reset(); airFilterR.reset()
+        dcRemovalL.reset(); dcRemovalR.reset()
+        dcBlockerL.reset(); dcBlockerR.reset()
+        aaFilterL.reset(); aaFilterR.reset()
+        subBassFilterL.reset(); subBassFilterR.reset()
+
         osSamplesL.fill(0.0)
         osSamplesR.fill(0.0)
+        ditherErrorL = 0.0
+        ditherErrorR = 0.0
         peakL = 0.0
         peakR = 0.0
     }

@@ -100,7 +100,7 @@ class AudioOutputManager(private val context: Context) {
                 context.registerReceiver(usbReceiver, filter)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
     }
 
@@ -234,7 +234,7 @@ class AudioOutputManager(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
         }
         return usbList
     }

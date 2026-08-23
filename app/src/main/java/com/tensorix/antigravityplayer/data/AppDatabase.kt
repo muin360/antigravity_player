@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         PlaylistSongCrossRef::class
     ],
     version = 4,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -30,7 +30,11 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "antigravity_player.db"
                 )
-                    .fallbackToDestructiveMigration(true)
+                    // Destructive fallback REMOVED (forensic remediation):
+                    // any future schema bump MUST ship a Migration in the
+                    // MIGRATIONS array; an unmigrated bump will now fail fast
+                    // at runtime instead of silently wiping user data.
+                    // .addMigrations(*MIGRATIONS)
                     .build()
                 INSTANCE = instance
                 instance

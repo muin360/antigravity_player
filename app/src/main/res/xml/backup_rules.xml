@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  fullBackupContent for API <= 30.
+  Secret-bearing preference files are excluded from all backups; the Room DB
+  and other preferences remain backed up so library/playlists survive restore.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="antigravity_ai_keys_secure.xml" />
+    <exclude domain="sharedpref" path="antigravity_ai_keys.xml" />
+</full-backup-content>

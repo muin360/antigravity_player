@@ -71,7 +71,7 @@ object FfmpegDecoder {
                 null
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             dstFile?.let { if (it.exists()) it.delete() }
             null
         } finally {

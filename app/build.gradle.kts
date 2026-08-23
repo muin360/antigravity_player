@@ -1,8 +1,12 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("kotlin-kapt")
+    id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 android {
@@ -13,8 +17,8 @@ android {
         applicationId = "com.tensorix.antigravityplayer"
         minSdk = 27
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.0-audiophile-release"
+        versionCode = 3
+        versionName = "1.1.0-forensic-hardening"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
@@ -29,6 +33,12 @@ android {
                 )
             }
         }
+
+        // YouTube extraction backend endpoints. Development defaults to the
+        // local emulator loopback; production MUST be an https:// host
+        // (enforced at runtime in YtApiService for release builds).
+        buildConfigField("String", "DEV_YT_BASE_URL", "\"http://10.0.2.2:3000\"")
+        buildConfigField("String", "PROD_YT_BASE_URL", "\"https://yt-backend.tensorix.com\"")
     }
 
     externalNativeBuild {
@@ -40,6 +50,7 @@ android {
     buildFeatures {
         compose = true
         prefab = true
+        buildConfig = true
     }
     packaging {
         jniLibs {
@@ -79,7 +90,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:1.6.8")
     implementation("androidx.compose.material3:material3:1.2.1")
     implementation("androidx.compose.material:material-icons-extended:1.6.8")
-    implementation("androidx.navigation:navigation-compose:2.7.7")
+    // navigation-compose removed: app uses a tab-switch pattern; the
+    // dependency was declared but no NavHost/NavController exists.
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
 
@@ -89,24 +101,22 @@ dependencies {
     // Oboe for direct hardware DAC access (16 KB page-aligned for Android 15+)
     implementation("com.google.oboe:oboe:1.9.3")
 
-    // Media3 / ExoPlayer -> Phase 1 & 2 (player engine + DSP)
+    // Media3 / ExoPlayer -> player engine + session + custom DSP
+    // (media3-ui / rtsp were unused and removed)
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-session:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.3.1")
     // implementation("androidx.media3:media3-exoplayer-ffmpeg:1.3.1") // Requires manual JNI build for most devices
     
     // External high-performance decoder support via MediaCodec hardening
     // Phase 15: High-Precision 64-bit Audio DSP Architecture Enhancement
 
-    // Room DB -> Phase 1 (library) & Phase 3 (YT cache)
+    // Room DB -> Phase 1 (library) & Phase 3 (YT cache).
+    // Schema JSONs are exported to app/schemas for versioned migration tests.
     implementation("androidx.room:room-runtime:2.7.0-alpha13")
     implementation("androidx.room:room-ktx:2.7.0-alpha13")
-    kapt("androidx.room:room-compiler:2.7.0-alpha13")
+    ksp("androidx.room:room-compiler:2.7.0-alpha13")
 
-    // Networking -> Phase 3 (backend calls) & Phase 4 (LLM APIs)
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+    // Networking -> LLM APIs (OkHttp only; Retrofit/Gson were unused and removed)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // Security -> Phase 4 (encrypted BYOK key storage)
@@ -119,4 +129,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.11.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.3.1")
+    // Real org.json for JVM tests (android.jar ships only method stubs).
+    testImplementation("org.json:json:20240303")
 }
