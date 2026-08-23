@@ -82,6 +82,13 @@ object OboeBridge {
     external fun getPeakR(handle: Long): Double
     external fun getPhaseCorrelation(handle: Long): Float
 
+    /**
+     * Frame-domain telemetry in RESAMPLED-OUTPUT frames (P0-2):
+     * [0] outputFramesProduced, [1] hardwareFramesWritten, [2] stagedPending.
+     * Null when the handle is stale/closed.
+     */
+    external fun getStreamFrameTelemetry(handle: Long): LongArray?
+
     data class NativeStreamInfo(
         val api: String,
         val sharingMode: String,

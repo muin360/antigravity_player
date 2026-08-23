@@ -557,7 +557,7 @@ class PlaybackService : MediaSessionService() {
             val profile = dynamicProfileEngine?.evaluateAndSwitch(activeRoute, null, trackInfo)
             if (profile != null) {
                 equalizerEngine?.applyHiFiProfile(profile)
-                
+
                 when (activeRoute) {
                     AudioOutputRouteType.USB_DAC, AudioOutputRouteType.USB_DEVICE -> {
                         equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
@@ -569,11 +569,45 @@ class PlaybackService : MediaSessionService() {
                         equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.DYNAMIC)
                     }
                     else -> {
-                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE)
+                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
                     }
                 }
             }
         }
+
+        logRouteProof()
+    }
+
+    /**
+     * P0-8: PROOF of the actual output device. Correlates the live native
+     * stream's deviceId against the OS output-device enumeration. Availability
+     * of a route is never reported as an active one.
+     */
+    private fun logRouteProof() {
+        val info = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentStreamInfo ?: return
+        if (info.deviceId <= 0) return
+        runCatching {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val match = devices.firstOrNull { it.id == info.deviceId }
+            val typeName = match?.let { deviceTypeName(it.type) } ?: "UNKNOWN"
+            Log.i(
+                "ROUTE_PROOF",
+                "nativeDev=${info.deviceId} found=${match != null} type=$typeName " +
+                    "name=${match?.productName} rate=${info.sampleRate} ch=${info.channelCount} " +
+                    "mode=${info.sharingMode} perf=${info.performanceMode} state=${info.state}"
+            )
+        }
+    }
+
+    private fun deviceTypeName(type: Int): String = when (type) {
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "WIRED"
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BLUETOOTH_A2DP"
+        android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+        android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+        android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB"
+        android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "SPEAKER"
+        else -> "TYPE_$type"
     }
 
     fun setHiFiEnabled(enabled: Boolean) {

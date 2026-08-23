@@ -34,7 +34,6 @@ constexpr jint kErrBadArguments = -3;
 
 constexpr int64_t kWriteTimeoutNs = 20 * 1000000LL;      // 20 ms bounded write
 constexpr int32_t kMaxConsecutiveTimeouts = 50;
-constexpr size_t kMaxPendingOutputSamples = 1u << 20;     // ~4 MB float staging cap
 constexpr int32_t kMaxFramesPerCall = 1 << 20;            // sanity bound
 constexpr int64_t kPositionQueryIntervalNs = 10 * 1000000LL; // 10 ms throttle
 
@@ -84,10 +83,105 @@ public:
 
     std::vector<float> pcmFloatScratchBuffer;
 
-    // Resampled-output staging drained across successive write calls.
-    std::mutex stagingMutex;
-    std::vector<float> pendingOutput;
-    size_t pendingOffset = 0;
+    // -------------------------------------------------------------------
+    // OUTPUT STAGING RING (P0-4)
+    //
+    // Fixed-capacity, preallocated ring of interleaved float samples in the
+    // RESAMPLED OUTPUT frame domain. The render thread is the ONLY mutator
+    // of head_/tail_ (producer AND consumer); the control thread only sets
+    // clearPending_, which the render thread honours at the next call
+    // boundary. Therefore NO LOCK is ever held during the Oboe device write,
+    // and no vector can resize underneath a live pointer.
+    //
+    // Frame domains (see docs/p0-playback-core-final-report.md):
+    //   outputFramesProduced_ : total frames appended to ring or written
+    //                           straight through (passthrough)
+    //   atomicFramesWritten   : frames accepted by the hardware stream
+    //   stagedPendingFrames() : frames in ring not yet handed to hardware
+    // -------------------------------------------------------------------
+    static constexpr size_t kRingCapacitySamples = 1u << 16;   // 256 KB floats (power of two)
+    static constexpr size_t kWriteScratchFrames = 4096;
+    static constexpr size_t kRingMask = kRingCapacitySamples - 1;
+
+    std::vector<float> ring_;                 // preallocated at open, never resized
+    std::vector<float> writeScratch_;         // preallocated at open, never resized
+    std::vector<float> resampleWork_;         // render-thread-only scratch (may grow)
+
+    // Absolute monotonic sample counters (render thread is the sole mutator;
+    // atomics so control threads can read telemetry safely).
+    std::atomic<uint64_t> ringHead_{0};
+    std::atomic<uint64_t> ringTail_{0};
+    std::atomic<bool> clearPending_{false};
+    std::atomic<int64_t> outputFramesProduced_{0};
+
+    inline uint64_t stagedSamples() const {
+        return ringHead_.load(std::memory_order_relaxed) -
+               ringTail_.load(std::memory_order_relaxed);
+    }
+
+    // Render thread only: honour a pending discard request from flush/reconfig.
+    void applyClearIfRequested() {
+        if (clearPending_.exchange(false, std::memory_order_acq_rel)) {
+            ringHead_.store(0, std::memory_order_relaxed);
+            ringTail_.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    // Render thread only: append interleaved samples to the ring.
+    // Returns false when the ring would overflow (device stalled).
+    bool appendToRing(const float *samples, size_t count) {
+        if (stagedSamples() + count > kRingCapacitySamples) return false;
+        uint64_t h = ringHead_.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < count; ++i) {
+            ring_[static_cast<size_t>(h++) & kRingMask] = samples[i];
+        }
+        ringHead_.store(h, std::memory_order_release);
+        return true;
+    }
+
+    // Render thread only: drain staged output to hardware WITHOUT holding any
+    // lock (P0-4). Data is copied into the preallocated scratch first so no
+    // live pointer ever depends on mutable container state.
+    // Returns frames written this call; sets *stalled on fatal conditions.
+    int32_t drainRingToStream(oboe::AudioStream *s, int32_t channels, bool *stalled) {
+        applyClearIfRequested();
+        int32_t writtenTotal = 0;
+        while (true) {
+            const uint64_t staged = stagedSamples();
+            const uint64_t stagedFrames = staged / static_cast<uint64_t>(channels);
+            if (stagedFrames == 0) break;
+            const size_t chunkFrames =
+                static_cast<size_t>(stagedFrames < kWriteScratchFrames
+                                        ? stagedFrames : kWriteScratchFrames);
+            const size_t samplesToCopy = chunkFrames * static_cast<size_t>(channels);
+            uint64_t t = ringTail_.load(std::memory_order_relaxed);
+            for (size_t i = 0; i < samplesToCopy; ++i) {
+                writeScratch_[i] = ring_[static_cast<size_t>(t + i) & kRingMask];
+            }
+
+            const auto result = s->write(writeScratch_.data(),
+                                         static_cast<int32_t>(chunkFrames),
+                                         kWriteTimeoutNs);
+            if (result.error() != oboe::Result::OK) {
+                if (result.error() == oboe::Result::ErrorTimeout) {
+                    const int32_t timeouts =
+                        consecutiveTimeouts.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (timeouts > kMaxConsecutiveTimeouts) *stalled = true;
+                } else {
+                    *stalled = true;   // hard write error
+                }
+                break;   // staged data remains; continue next call
+            }
+            consecutiveTimeouts.store(0, std::memory_order_relaxed);
+            const int32_t written = result.value();
+            ringTail_.store(t + static_cast<uint64_t>(written) * channels,
+                            std::memory_order_relaxed);
+            atomicFramesWritten.fetch_add(written, std::memory_order_relaxed);
+            writtenTotal += written;
+            if (written < chunkFrames) break;   // device backpressured
+        }
+        return writtenTotal;
+    }
 
     std::mutex lifecycleMutex;
 
@@ -103,7 +197,6 @@ public:
 
     explicit OboeStreamWrapper(uint64_t gen) : generationId(gen) {
         pcmFloatScratchBuffer.reserve(16384);
-        pendingOutput.reserve(16384);
     }
 
     ~OboeStreamWrapper() override {
@@ -121,37 +214,39 @@ public:
             stream->close();
             stream = nullptr;
         }
-        clearStaging();
+        clearPending_.store(true, std::memory_order_release);
         atomicFramesWritten.store(0, std::memory_order_relaxed);
+        outputFramesProduced_.store(0, std::memory_order_relaxed);
         atomicTimestampUs.store(0, std::memory_order_relaxed);
         atomicPositionFrames.store(0, std::memory_order_relaxed);
         consecutiveTimeouts.store(0, std::memory_order_relaxed);
     }
 
-    void clearStaging() {
-        std::lock_guard<std::mutex> lk(stagingMutex);
-        pendingOutput.clear();
-        pendingOffset = 0;
-    }
-
     void flush() {
-        std::lock_guard<std::mutex> lock(lifecycleMutex);
-        if (stream && isActive.load(std::memory_order_acquire)) {
-            const auto state = stream->getState();
-            if (state == oboe::StreamState::Started) {
-                stream->requestPause();
-                stream->flush();
-                stream->requestStart();
-            } else {
-                stream->flush();
+        {
+            std::lock_guard<std::mutex> lock(lifecycleMutex);
+            if (stream && isActive.load(std::memory_order_acquire)) {
+                const auto state = stream->getState();
+                if (state == oboe::StreamState::Started) {
+                    stream->requestPause();
+                    stream->flush();
+                    stream->requestStart();
+                } else {
+                    stream->flush();
+                }
             }
         }
         atomicFramesWritten.store(0, std::memory_order_release);
+        outputFramesProduced_.store(0, std::memory_order_release);
         atomicTimestampUs.store(0, std::memory_order_release);
         atomicPositionFrames.store(0, std::memory_order_release);
         consecutiveTimeouts.store(0, std::memory_order_release);
+        lastQueryNs.store(0, std::memory_order_relaxed);
+        lastQueryFramePos.store(0, std::memory_order_relaxed);
+        // Render thread discards ring contents at its next call boundary
+        // (P0-6.3: no pre-seek audio may survive a flush).
+        clearPending_.store(true, std::memory_order_release);
         resampler.reset();          // deferred internally to the render thread
-        clearStaging();
     }
 
     void pause() {
@@ -258,13 +353,6 @@ public:
         if (stream == audioStream) {
             stream = nullptr;
         }
-    }
-
-private:
-    // Caller must hold stagingMutex.
-    void clearStagingLocked() {
-        pendingOutput.clear();
-        pendingOffset = 0;
     }
 };
 
@@ -391,6 +479,13 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     wrapper->dsp.setSampleRate(static_cast<double>(openedStream->getSampleRate()));
     wrapper->resampler.configure(sampleRate, openedStream->getSampleRate(),
                                  actualChannels, antigravity::ResampleQuality::SINC_FAST);
+
+    // Preallocate the fixed data-path buffers ONCE (P0-4/P0-16): the render
+    // thread never resizes or reallocates anything from this point on.
+    wrapper->ring_.assign(OboeStreamWrapper::kRingCapacitySamples, 0.0f);
+    wrapper->writeScratch_.assign(
+        OboeStreamWrapper::kWriteScratchFrames * static_cast<size_t>(std::max(1, actualChannels)),
+        0.0f);
 
     LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d",
          oboe::convertToText(openedStream->getAudioApi()),
@@ -557,46 +652,38 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         const int32_t written = result.value();
         if (written > 0) {
             wrapper->atomicFramesWritten.fetch_add(written, std::memory_order_relaxed);
+            wrapper->outputFramesProduced_.fetch_add(written, std::memory_order_relaxed);
         }
         return std::min(written, numFrames);
     }
 
     // ---- Resampling path with explicit consumed-frames contract ----
-    // The resampler consumes ALL provided input (buffering internally), so
-    // produced output is appended to a staging queue drained over successive
-    // calls. We therefore report full input consumption every call and rely
-    // on the staging cap for stall detection - unresampled data is never
-    // sent to hardware and no produced frames are ever dropped.
+    // Phase A: DSP + resampler produce into RENDER-OWNED scratch; output is
+    //          appended to the fixed ring (overflow = device stall).
+    // Phase B: drain ring -> hardware with NO LOCK held during Oboe I/O.
+    // The resampler consumes ALL provided input (buffered internally), so we
+    // report full input consumption every call and staging owns the produced
+    // output until hardware accepts it. Unresampled data is never written and
+    // no produced frames are ever dropped.
     if (!bypassDsp) {
         wrapper->dsp.process(scratch, numFrames, channelCount);
     }
 
-    float *outData = nullptr;
-    int32_t consumed = 0;
-    {
-        std::lock_guard<std::mutex> lk(wrapper->stagingMutex);
+    antigravity::AudiophileResampler::Result r =
+        wrapper->resampler.process(scratch, numFrames, wrapper->resampleWork_);
 
-        // Compact fully-drained staging to keep amortised cost low.
-        if (wrapper->pendingOffset > 0 &&
-            wrapper->pendingOffset == wrapper->pendingOutput.size()) {
-            wrapper->pendingOutput.clear();
-            wrapper->pendingOffset = 0;
-        }
-
-        antigravity::AudiophileResampler::Result r =
-            wrapper->resampler.process(scratch, numFrames, wrapper->pendingOutput);
-        consumed = r.inputFramesConsumed;
-        outData = wrapper->pendingOutput.data();
-
-        const size_t stagedSamples =
-            (wrapper->pendingOutput.size() - wrapper->pendingOffset);
-        if (stagedSamples >
-            static_cast<size_t>(kMaxPendingOutputSamples)) {
-            LOGW("Resample staging overflow (device stalled); deactivating gen=%llu",
+    wrapper->applyClearIfRequested();
+    const size_t producedSamples =
+        static_cast<size_t>(r.outputFrames) * static_cast<size_t>(channelCount);
+    if (producedSamples > 0) {
+        if (!wrapper->appendToRing(wrapper->resampleWork_.data(), producedSamples)) {
+            LOGW("Resample ring overflow (device stalled); deactivating gen=%llu",
                  static_cast<unsigned long long>(wrapper->generationId));
             wrapper->isActive.store(false, std::memory_order_release);
             return kErrStaleOrWrite;
         }
+        wrapper->outputFramesProduced_.fetch_add(r.outputFrames,
+                                                 std::memory_order_relaxed);
     }
 
     oboe::AudioStream *activeStream = wrapper->stream;
@@ -604,57 +691,22 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         return kErrStaleOrWrite;
     }
 
-    // Drain staging (bounded work per call; leftovers continue next call).
+    // Phase B: device write with NO staging/lifecycle lock held.
     bool stalled = false;
-    {
-        std::lock_guard<std::mutex> lk(wrapper->stagingMutex);
-        size_t &offset = wrapper->pendingOffset;
-        const size_t availableSamples =
-            wrapper->pendingOutput.size() - offset;
-        const int32_t availableFrames =
-            static_cast<int32_t>(availableSamples / static_cast<size_t>(channelCount));
-
-        int32_t writtenTotal = 0;
-        while (writtenTotal < availableFrames) {
-            const int32_t chunk =
-                std::min<int32_t>(availableFrames - writtenTotal, 4096);
-            const auto result = activeStream->write(
-                wrapper->pendingOutput.data() + offset +
-                    static_cast<size_t>(writtenTotal) * channelCount,
-                chunk, kWriteTimeoutNs);
-            if (result.error() != oboe::Result::OK) {
-                if (result.error() == oboe::Result::ErrorTimeout) {
-                    const int32_t timeouts =
-                        wrapper->consecutiveTimeouts.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (timeouts > kMaxConsecutiveTimeouts) stalled = true;
-                    break;   // keep staged data; continue next call
-                }
-                stalled = true;  // hard write error
-                break;
-            }
-            wrapper->consecutiveTimeouts.store(0, std::memory_order_relaxed);
-            const int32_t written = result.value();
-            writtenTotal += written;
-            if (written < chunk) break;   // device backpressured
-        }
-
-        offset += static_cast<size_t>(writtenTotal) * channelCount;
-        wrapper->atomicFramesWritten.fetch_add(writtenTotal, std::memory_order_relaxed);
-
-        if (stalled && writtenTotal == 0) {
-            // Nothing progressed at all: treat as fatal for this stream.
-            LOGW("Resampled stream made no progress; deactivating gen=%llu",
-                 static_cast<unsigned long long>(wrapper->generationId));
-            wrapper->isActive.store(false, std::memory_order_release);
-            return kErrStaleOrWrite;
-        }
+    wrapper->drainRingToStream(activeStream, channelCount, &stalled);
+    if (stalled && wrapper->consecutiveTimeouts.load(std::memory_order_relaxed)
+            > kMaxConsecutiveTimeouts) {
+        LOGW("Resampled stream stalled; deactivating gen=%llu",
+             static_cast<unsigned long long>(wrapper->generationId));
+        wrapper->isActive.store(false, std::memory_order_release);
+        return kErrStaleOrWrite;
     }
 
-    if (consumed <= 0) {
+    if (r.inputFramesConsumed <= 0) {
         // Defensive: resampler refused input; report nothing consumed.
         return 0;
     }
-    return std::min(consumed, numFrames);
+    return std::min(r.inputFramesConsumed, numFrames);
 }
 
 // ---------------------------------------------------------------------------
@@ -719,48 +771,40 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         }
         returnValue = std::min(written, numFrames);
     } else {
+        // Resampled legacy path: same lock-free ring model as writeDirect.
         if (!bypassDsp) {
             wrapper->dsp.process(data, numFrames, channelCount);
         }
-        {
-            std::lock_guard<std::mutex> lk(wrapper->stagingMutex);
-            if (wrapper->pendingOffset > 0 &&
-                wrapper->pendingOffset == wrapper->pendingOutput.size()) {
-                wrapper->pendingOutput.clear();
-                wrapper->pendingOffset = 0;
-            }
-            wrapper->resampler.process(data, numFrames, wrapper->pendingOutput);
-        }
+
+        antigravity::AudiophileResampler::Result r =
+            wrapper->resampler.process(data, numFrames, wrapper->resampleWork_);
         env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
+
+        wrapper->applyClearIfRequested();
+        const size_t producedSamples =
+            static_cast<size_t>(r.outputFrames) * static_cast<size_t>(channelCount);
+        if (producedSamples > 0 &&
+            !wrapper->appendToRing(wrapper->resampleWork_.data(), producedSamples)) {
+            wrapper->isActive.store(false, std::memory_order_release);
+            return kErrStaleOrWrite;
+        }
+        if (r.outputFrames > 0) {
+            wrapper->outputFramesProduced_.fetch_add(r.outputFrames,
+                                                     std::memory_order_relaxed);
+        }
 
         oboe::AudioStream *activeStream = wrapper->stream;
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
 
-        jint consumedOut = numFrames;
-        {
-            std::lock_guard<std::mutex> lk(wrapper->stagingMutex);
-            size_t &offset = wrapper->pendingOffset;
-            const int32_t availableFrames = static_cast<int32_t>(
-                (wrapper->pendingOutput.size() - offset) /
-                static_cast<size_t>(channelCount));
-            int32_t writtenTotal = 0;
-            while (writtenTotal < availableFrames) {
-                const int32_t chunk =
-                    std::min<int32_t>(availableFrames - writtenTotal, 4096);
-                const auto result = activeStream->write(
-                    wrapper->pendingOutput.data() + offset +
-                        static_cast<size_t>(writtenTotal) * channelCount,
-                    chunk, kWriteTimeoutNs);
-                if (result.error() != oboe::Result::OK) break;
-                writtenTotal += result.value();
-                if (result.value() < chunk) break;
-            }
-            offset += static_cast<size_t>(writtenTotal) * channelCount;
-            wrapper->atomicFramesWritten.fetch_add(writtenTotal, std::memory_order_relaxed);
+        bool stalled = false;
+        wrapper->drainRingToStream(activeStream, channelCount, &stalled);
+        if (stalled) {
+            wrapper->isActive.store(false, std::memory_order_release);
+            return kErrStaleOrWrite;
         }
-        returnValue = consumedOut;
+        returnValue = std::min(r.inputFramesConsumed, numFrames);
     }
 
     return returnValue;
@@ -1052,6 +1096,35 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getPhaseCorrelation(
     JNIEnv *env, jobject thiz, jlong handle) {
     auto w = getStream(handle);
     return w ? w->dsp.getPhaseCorrelation() : 1.0f;
+}
+
+// Frame-domain telemetry (P0-2): all values in RESAMPLED-OUTPUT frames.
+// [0] outputFramesProduced   (staged + handed to hardware)
+// [1] hardwareFramesWritten  (accepted by the device stream)
+// [2] stagedPendingFrames    (in ring, not yet handed to hardware)
+JNIEXPORT jlongArray JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStreamFrameTelemetry(
+    JNIEnv *env, jobject thiz, jlong handle) {
+    auto w = getStream(handle);
+    if (!w) return nullptr;
+
+    jlong v[3];
+    v[0] = static_cast<jlong>(
+        w->outputFramesProduced_.load(std::memory_order_relaxed));
+    v[1] = static_cast<jlong>(
+        w->atomicFramesWritten.load(std::memory_order_relaxed));
+    const uint64_t stagedFrames =
+        w->stagedSamples() /
+        static_cast<uint64_t>(std::max(1, w->configuredChannelCount));
+    v[2] = static_cast<jlong>(stagedFrames);
+
+    auto out = env->NewLongArray(3);
+    if (!out || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
+    env->SetLongArrayRegion(out, 0, 3, v);
+    return out;
 }
 
 JNIEXPORT jobject JNICALL

@@ -229,6 +229,14 @@ class MusicController(private val context: Context) {
         }
         if (songs.isEmpty()) return
 
+        // P0-7 incremental switching: if the requested queue is IDENTICAL to
+        // the live Media3 timeline, never rebuild it - just select the target.
+        if (isSameQueue(songs)) {
+            val safeIndex = startIndex.coerceIn(0, songs.lastIndex)
+            selectTimelineItem(controller, safeIndex, startAtZero = true)
+            return
+        }
+
         songMap.clear()
         val mediaItems = songs.map { song ->
             val idStr = song.id.toString()
@@ -258,16 +266,56 @@ class MusicController(private val context: Context) {
         val safeIndex = startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0))
         runCatching { Log.i("STARTUP_TIMING", "T0: User requested playback for track=${songs.getOrNull(safeIndex)?.title}") }
 
-        // Use setMediaItems without stop/clear to be less aggressive
-        // and prevent the "lock" state.
         controller.setMediaItems(mediaItems, safeIndex, 0L)
         controller.prepare()
         controller.play()
     }
 
     fun playSong(song: Song, fullList: List<Song> = listOf(song)) {
+        // P0-7: selecting a track that already lives in the current timeline
+        // is a seek, not a queue rebuild (no freeze, no position loss).
+        val existingIndex = _queue.value.indexOfFirst { it.id == song.id }
+        if (existingIndex >= 0) {
+            val controller = mediaController
+            if (controller != null && controller.isConnected) {
+                val isCurrent = controller.currentMediaItem?.mediaId == song.id.toString()
+                if (isCurrent) {
+                    // Same track clicked again: restart it without touching the queue.
+                    controller.seekTo(0L)
+                    controller.play()
+                    _currentPositionMs.value = 0L
+                    return
+                }
+                selectTimelineItem(controller, existingIndex, startAtZero = true)
+                return
+            }
+        }
         val index = fullList.indexOfFirst { it.id == song.id }.let { if (it == -1) 0 else it }
         playPlaylist(fullList, index)
+    }
+
+    /** True when the live timeline contains exactly these songs in order. */
+    private fun isSameQueue(songs: List<Song>): Boolean {
+        val currentIds = _queue.value.map { it.id }
+        val requestedIds = songs.map { it.id }
+        return currentIds == requestedIds && currentIds.isNotEmpty()
+    }
+
+    /**
+     * Selects an item in the EXISTING timeline. Uses the mirrored song map to
+     * keep _currentSong/_queue coherent; Media3 fires onMediaItemTransition so
+     * all downstream state (ReplayGain, notifications) updates normally.
+     */
+    private fun selectTimelineItem(controller: MediaController, index: Int, startAtZero: Boolean) {
+        runCatching {
+            if (index in 0 until controller.mediaItemCount) {
+                if (startAtZero) controller.seekToDefaultPosition(index) else controller.seekTo(index, 0L)
+                controller.play()
+                Log.i("TRACK_SWITCH", "incremental select index=$index total=${controller.mediaItemCount}")
+            } else {
+                Log.w("TRACK_SWITCH", "select index=$index outside live timeline (${controller.mediaItemCount})")
+            }
+        }
     }
 
     fun playNext(song: Song) {
