@@ -74,6 +74,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _lyricsLines = MutableStateFlow<List<LrcLine>>(emptyList())
     val lyricsLines: StateFlow<List<LrcLine>> = _lyricsLines.asStateFlow()
 
+    /** Sibling .lrc lookup: "<audio-path-without-ext>.lrc" next to the file. */
+    private fun loadLrcFor(song: Song): List<LrcLine> {
+        val path = song.filePath
+        if (!path.startsWith("/") && !path.startsWith("file:")) return emptyList()
+        return runCatching {
+            val file = if (path.startsWith("file:")) java.io.File(java.net.URI(path)) else java.io.File(path)
+            val lrc = java.io.File(file.parentFile, file.nameWithoutExtension + ".lrc")
+            if (lrc.isFile && lrc.length() in 1..(2L * 1024 * 1024)) {
+                LrcParser.parse(lrc.readText())
+            } else emptyList()
+        }.getOrDefault(emptyList())
+    }
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -98,7 +111,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _downloadingTrackId = MutableStateFlow<String?>(null)
     val downloadingTrackId: StateFlow<String?> = _downloadingTrackId.asStateFlow()
 
-    val audioOutputManager = AudioOutputManager(application)
+    /**
+     * P0 duplicate-ownership fix: the SERVICE owns the listening AudioOutputManager.
+     * The UI falls back to a poll-only instance (no system listeners) before the
+     * service exists, so route events can never trigger double reconfigurations.
+     */
+    private val fallbackOutputManager by lazy {
+        AudioOutputManager(application, registerSystemListeners = false)
+    }
+    val audioOutputManager: AudioOutputManager
+        get() = PlaybackService.instance?.audioOutputManager ?: fallbackOutputManager
 
     private val _hiFiSupported = MutableStateFlow<Boolean>(PlaybackService.isHiFiSupported())
     val hiFiSupported: StateFlow<Boolean> = _hiFiSupported.asStateFlow()
@@ -216,8 +238,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
-            audioOutputManager.outputState.collectLatest {
-                refreshAudioSnapshot()
+            // Lyrics wiring (was dead: nothing ever populated lyricsLines).
+            // Loads a sibling "<track>.lrc" next to the audio file when present.
+            currentSong.collectLatest { song ->
+                val lines = if (song == null || song.filePath.isBlank()) emptyList()
+                else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    loadLrcFor(song)
+                }
+                _lyricsLines.value = lines
+            }
+        }
+        viewModelScope.launch {
+            // Re-subscribes whenever the service instance swaps so UI always
+            // mirrors the OWNING manager's route state.
+            PlaybackService.instanceFlow.collectLatest { service ->
+                val manager = service?.audioOutputManager ?: fallbackOutputManager
+                manager.outputState.collectLatest {
+                    refreshAudioSnapshot()
+                }
             }
         }
         runCatching {

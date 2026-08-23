@@ -29,7 +29,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * - Strictly correlates active playback endpoint with real runtime stream state
  */
 @UnstableApi
-class AudioOutputManager(private val context: Context) {
+class AudioOutputManager(
+    private val context: Context,
+    /**
+     * ONLY the service-owned instance may register system listeners. The
+     * ViewModel-side poll-only instance must never double-register device
+     * callbacks / route broadcasts (duplicate AudioEngine.reconfigureRoute
+     * storms were traced here).
+     */
+    private val registerSystemListeners: Boolean = true
+) {
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
@@ -42,6 +51,12 @@ class AudioOutputManager(private val context: Context) {
 
     private val managerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     private var debounceJob: kotlinx.coroutines.Job? = null
+
+    // Memo cache for the expensive canonical-snapshot build (AudioManager +
+    // vendor probes + verification). Playback state changes used to rebuild it
+    // on every transition; identical inputs now reuse the last result.
+    private var memoKey: List<Any?>? = null
+    private var memoState: AudioOutputState? = null
 
     private fun onRouteEvent() {
         debounceJob?.cancel()
@@ -81,26 +96,30 @@ class AudioOutputManager(private val context: Context) {
 
     init {
         updateCache()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
+        if (registerSystemListeners && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
             audioManager.registerAudioDeviceCallback(deviceCallback, null)
         }
 
-        val filter = IntentFilter().apply {
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction(Intent.ACTION_HEADSET_PLUG)
-            addAction(AudioManager.ACTION_HEADSET_PLUG)
-            addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-        }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                context.registerReceiver(usbReceiver, filter)
+        if (registerSystemListeners) {
+            // NOTE: ACTION_AUDIO_BECOMING_NOISY is deliberately NOT observed
+            // here. Unplug-pause belongs to PlaybackService's receiver; a
+            // route reconfiguration during that pause was contamination.
+            val filter = IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+                addAction(Intent.ACTION_HEADSET_PLUG)
+                addAction(AudioManager.ACTION_HEADSET_PLUG)
             }
-        } catch (e: Exception) {
-            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("UnspecifiedRegisterReceiverFlag")
+                    context.registerReceiver(usbReceiver, filter)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
+            }
         }
     }
 
@@ -128,10 +147,10 @@ class AudioOutputManager(private val context: Context) {
     fun release() {
         debounceJob?.cancel()
         managerScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
-        runCatching {
+        if (registerSystemListeners) runCatching {
             context.unregisterReceiver(usbReceiver)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
+        if (registerSystemListeners && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
             audioManager.unregisterAudioDeviceCallback(deviceCallback)
         }
     }
@@ -251,27 +270,40 @@ class AudioOutputManager(private val context: Context) {
     }
 
     fun scanOutputStateInternal(trackInfo: AudioTrackInfo? = null, isDspActive: Boolean = true): AudioOutputState {
+        // Memo gate (Phase 13): identical inputs reuse the last computed state
+        // so playback-state transitions stop re-running vendor probes and the
+        // canonical verification pipeline.
+        val nativeInfoNow = OboeAudioSink.currentStreamInfo
+        val key = listOf(
+            trackInfo?.title, trackInfo?.artist, trackInfo?.sampleRateHz,
+            trackInfo?.bitDepth, trackInfo?.codec, isDspActive,
+            nativeInfoNow?.deviceId, nativeInfoNow?.sharingMode,
+            cachedRoutes.size
+        )
+        if (key == memoKey) return memoState ?: scanOutputStateUncached(trackInfo, isDspActive)
+        val state = scanOutputStateUncached(trackInfo, isDspActive)
+        memoKey = key
+        memoState = state
+        return state
+    }
+
+    private fun scanOutputStateUncached(trackInfo: AudioTrackInfo?, isDspActive: Boolean): AudioOutputState {
         if (cachedRoutes.isEmpty()) updateCache()
         
         val routes = cachedRoutes
         val usbDacs = cachedUsbDacs
 
-        // 1. Identify ACTUALLY ACTIVE route from correlated runtime evidence
+        // 1. Identify ACTUALLY ACTIVE route from correlated runtime evidence.
+        // P0-8 truth rules: an unmatched native deviceId stays UNKNOWN —
+        // opaque AAudio handles are NOT type bitmasks, and a lone non-speaker
+        // sink is NOT proof of the active route (principles 13/16).
         val nativeInfo = OboeAudioSink.currentStreamInfo
         val activeDevice: AudioDeviceInfo? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
             if (nativeInfo != null && nativeInfo.deviceId > 0) {
                 outputDevices.firstOrNull { it.id == nativeInfo.deviceId }
             } else {
-                // If stream is active on non-speaker, find the matching attached sink
-                val nonSpeaker = outputDevices.filter { it.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER && it.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-                if (nonSpeaker.size == 1) {
-                    nonSpeaker.first()
-                } else if (nonSpeaker.isEmpty()) {
-                    outputDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                } else {
-                    null // Ambiguous route correlation -> UNKNOWN
-                }
+                null // No live native device id -> correlation impossible -> UNKNOWN
             }
         } else null
 

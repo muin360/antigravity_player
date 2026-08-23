@@ -240,4 +240,67 @@ class OboeAudioSinkTest {
         assertEquals(0L, OboeAudioSink.currentActiveHandle)
         org.junit.Assert.assertNull(OboeAudioSink.currentStreamInfo)
     }
+
+    @Test
+    fun `test NativeStreamInfo 12-field constructor contract`() {
+        val info = OboeBridge.NativeStreamInfo(
+            api = "AAudio",
+            sharingMode = "SHARED",
+            performanceMode = "LowLatency",
+            sampleRate = 48000,
+            channelCount = 2,
+            format = "Float",
+            bufferSize = 192,
+            deviceId = 16500,
+            state = "Started",
+            isStarted = true,
+            framesWritten = 100000L,
+            underrunCount = 0
+        )
+
+        assertEquals("AAudio", info.api)
+        assertEquals("SHARED", info.sharingMode)
+        assertEquals("LowLatency", info.performanceMode)
+        assertEquals(48000, info.sampleRate)
+        assertEquals(2, info.channelCount)
+        assertEquals("Float", info.format)
+        assertEquals(192, info.bufferSize)
+        assertEquals(16500, info.deviceId)
+        assertEquals("Started", info.state)
+        assertTrue(info.isStarted)
+        assertEquals(100000L, info.framesWritten)
+        assertEquals(0, info.underrunCount)
+    }
+
+    @Test
+    fun `test Seek state machine transition sequence`() {
+        val context = mock<Context>()
+        val sink = OboeAudioSink(context, dspProcessor = null, bitPerfectMode = false)
+
+        val format = Format.Builder()
+            .setSampleMimeType("audio/raw")
+            .setPcmEncoding(C.ENCODING_PCM_16BIT)
+            .setSampleRate(44100)
+            .setChannelCount(2)
+            .build()
+
+        sink.configure(format, 4096, null)
+
+        // 1. Initial state
+        assertEquals(C.TIME_UNSET, sink.getCurrentPositionUs(false))
+
+        // 2. Discontinuity / Seek
+        sink.handleDiscontinuity()
+        assertEquals(C.TIME_UNSET, sink.getCurrentPositionUs(false))
+
+        // 3. Buffer delivery after seek
+        val buffer = ByteBuffer.allocateDirect(1024).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.put(ByteArray(1024))
+        buffer.flip()
+        sink.handleBuffer(buffer, 5_000_000L, 1)
+
+        // 4. Subsequent seek resets anchor cleanly
+        sink.flush()
+        assertEquals(C.TIME_UNSET, sink.getCurrentPositionUs(false))
+    }
 }

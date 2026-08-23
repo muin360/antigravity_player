@@ -379,7 +379,7 @@ object HardwareHiFiVerifier {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val cr = context.contentResolver
 
-        // 1. Vivo / iQOO Hi-Fi Probing (Vivo X21A / Asahi Kasei AK4376A / ESS Sabre ES9218)
+        // 1. Vivo / iQOO Hi-Fi Probing (runtime parameters + settings + sysfs)
         if (manufacturer.contains("vivo") || brand.contains("vivo") || brand.contains("iqoo") || model.contains("x21")) {
             val hifiStateParam = audioManager?.getParameters("vivo_hifi_state") ?: ""
             val hifiParam = audioManager?.getParameters("vivo_hifi") ?: ""
@@ -413,15 +413,12 @@ object HardwareHiFiVerifier {
             }
 
             details.add("Vivo Hi-Fi Individual Parameters: state='$hifiStateParam', hifi='$hifiParam', setting=$hifiSettingState")
-            val chipName = if (model.contains("x21") || hardware.contains("sdm660")) {
-                "Vivo Asahi Kasei AK4376A / ESS Sabre DAC"
-            } else {
-                "Vivo Cirrus Logic / AKM Hardware Hi-Fi DAC"
-            }
-            return Tuple4(isHiFiActive, dacState, chipName, "Asahi Kasei / Vivo Electronics")
+            // Principle 16: chip identity is NEVER inferred from model/board.
+            val chipName = "Vivo OEM Hi-Fi DAC (chip unverified)"
+            return Tuple4(isHiFiActive, dacState, chipName, "OEM vendor path (runtime-probed)")
         }
 
-        // 2. LG Quad DAC Probing (ESS Sabre ES9218P)
+        // 2. LG Quad DAC Probing (runtime settings/params only)
         if (manufacturer.contains("lge") || brand.contains("lge")) {
             val quadDacSetting = runCatching { Settings.System.getInt(cr, "quad_dac_state") }.getOrDefault(-1)
             val quadDacParam = audioManager?.getParameters("quad_dac_state") ?: ""
@@ -429,7 +426,7 @@ object HardwareHiFiVerifier {
 
             val dacState = if (isQuadDacActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
             details.add("LG Quad DAC Setting: $quadDacSetting, Param: '$quadDacParam'")
-            return Tuple4(isQuadDacActive, dacState, "LG Quad DAC (ESS Sabre ES9218P)", "ESS Technology / LG Electronics")
+            return Tuple4(isQuadDacActive, dacState, "LG OEM Quad DAC (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
         // 3. Samsung UHQ Probing
@@ -438,7 +435,7 @@ object HardwareHiFiVerifier {
             val isUhqActive = uhqSetting == 1
             val dacState = if (isUhqActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
             details.add("Samsung UHQ Setting: $uhqSetting")
-            return Tuple4(isUhqActive, dacState, "Samsung SoundAlive UHQ 32-bit Float DAC", "Samsung Electronics Co., Ltd.")
+            return Tuple4(isUhqActive, dacState, "Samsung OEM UHQ DAC (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
         // 4. Sony Xperia Hi-Res Probing
@@ -447,7 +444,7 @@ object HardwareHiFiVerifier {
             val isSonyActive = sonySetting == 1
             val dacState = if (isSonyActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
             details.add("Sony Hi-Res Setting: $sonySetting")
-            return Tuple4(isSonyActive, dacState, "Sony S-Master HX / DSEE HX Engine", "Sony Corporation")
+            return Tuple4(isSonyActive, dacState, "Sony OEM Hi-Res Engine (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
         // 5. Qualcomm Snapdragon Direct PCM Fallback
@@ -458,8 +455,8 @@ object HardwareHiFiVerifier {
         return Tuple4(
             isQcomActive,
             dacState,
-            "Qualcomm Snapdragon Aqstic Direct PCM",
-            "Qualcomm Technologies, Inc."
+            "Qualcomm Direct PCM route (chip unverified)",
+            "Vendor path (runtime-probed)"
         )
     }
 

@@ -76,9 +76,9 @@ fun SettingsScreen(
         )
     }
     
-    val hiFiEnabled by (PlaybackService.instance?.hiFiEnabled ?: MutableStateFlow(true)).collectAsState()
-    val isTurboMode by (PlaybackService.instance?.sampleRateMatching ?: MutableStateFlow(true)).collectAsState()
-    val autoProfileSwitch by (PlaybackService.instance?.autoProfileSwitch ?: MutableStateFlow(true)).collectAsState()
+    val hiFiEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.hiFiEnabled, true)
+    val isTurboMode by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.sampleRateMatching, true)
+    val autoProfileSwitch by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.autoProfileSwitch, true)
 
     var showDiagnostics by remember { mutableStateOf(false) }
     var showOutputConfig by remember { mutableStateOf(false) }

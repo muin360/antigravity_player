@@ -21,7 +21,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.dp
 import com.tensorix.antigravityplayer.ui.theme.PrimaryCyan
 import com.tensorix.antigravityplayer.ui.theme.SecondaryViolet
-import kotlin.random.Random
 
 @Composable
 fun AudioVisualizer(

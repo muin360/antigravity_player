@@ -58,9 +58,6 @@ object AudioInitializationCoordinator {
                     Log.i(TAG, "Initializing canonical AudioEngine...")
                     AudioEngine.invalidate()
                     
-                    // Run optional vendor probe asynchronously in background
-                    triggerOptionalVendorProbe(context)
-                    
                     _state.value = AppInitializationState.READY
                     Log.i(TAG, "Audio engine and coordinator initialized successfully.")
                 } catch (t: Throwable) {

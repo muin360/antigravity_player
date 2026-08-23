@@ -193,7 +193,7 @@ fun AiChatSheet(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(messages) { msg ->
+                        items(messages, key = { it.hashCode() }) { msg ->
                             val isUser = msg.sender == "USER"
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

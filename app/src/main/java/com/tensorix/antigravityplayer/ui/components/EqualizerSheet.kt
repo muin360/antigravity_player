@@ -110,8 +110,8 @@ fun EqualizerSheet(
     val hrtfRoomSize by equalizerEngine.hrtfRoomSize.collectAsState()
 
     val autoEqEngine = PlaybackService.instance?.autoEqEngine
-    val activeAutoEqProfile by (autoEqEngine?.activeProfile ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
-    val isAutoEqEnabled by (autoEqEngine?.isAutoEqEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val activeAutoEqProfile by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.activeProfile, null)
+    val isAutoEqEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.isAutoEqEnabled, false)
     var autoEqDialogExpanded by remember { mutableStateOf(false) }
 
     var presetMenuExpanded by remember { mutableStateOf(false) }
@@ -786,7 +786,7 @@ fun AutoEqSelectionDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(brands) { brand ->
+                    items(brands, key = { it }) { brand ->
                         val isSelected = (selectedBrand == brand) || (selectedBrand == null && brand == "ALL")
                         Box(
                             modifier = Modifier
@@ -813,7 +813,7 @@ fun AutoEqSelectionDialog(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(filteredProfiles) { profile ->
+                    items(filteredProfiles, key = { it.id }) { profile ->
                         val isActive = (profile.id == activeProfile?.id)
                         Box(
                             modifier = Modifier

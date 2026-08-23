@@ -15,6 +15,7 @@ import com.tensorix.antigravityplayer.data.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,10 +62,18 @@ class MusicController(private val context: Context) {
         initController()
     }
 
+    private var initRetries = 0
     private fun initController() {
         if (mediaController != null && mediaController?.isConnected == true) return
         if (controllerFuture != null) return
-        
+
+        // Bound the retry loop: a permanently dead session component must not
+        // schedule reconnect attempts forever.
+        if (initRetries >= 5) {
+            Log.e("MusicController", "Session bind failed after $initRetries retries; giving up until next user action.")
+            return
+        }
+
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
         controllerFuture?.addListener({
@@ -76,12 +85,13 @@ class MusicController(private val context: Context) {
                 pendingPlayAction?.invoke()
                 pendingPlayAction = null
                 controllerFuture = null
+                initRetries = 0
             } catch (e: Exception) {
                 android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
                 controllerFuture = null
-                // Retry after delay if failed
+                initRetries++
                 scope.launch {
-                    delay(2000)
+                    delay(2000L * initRetries)
                     initController()
                 }
             }
@@ -454,10 +464,7 @@ class MusicController(private val context: Context) {
 
     fun release() {
         stopProgressTracker()
-        scope.launch {
-            // Cancel job
-            scope.coroutineContext[Job]?.cancel()
-        }
+        scope.cancel()
         controllerFuture?.let { MediaController.releaseFuture(it) }
     }
 

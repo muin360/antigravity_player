@@ -75,8 +75,12 @@ object VendorDacManager {
                     Settings.System.putInt(cr, "hifi_settings_music", 1)
                     true
                 } else false
+            } catch (iae: IllegalArgumentException) {
+                // ROM redirected to Secure settings or rejected key; expected on standard user builds
+                Log.d(TAG, "VivoAdapter: Settings.System key unsupported on this build (${iae.message})")
+                false
             } catch (t: Throwable) {
-                CrashDiagnostics.record("VIVO_ADAPTER", "Settings.System write", t)
+                Log.d(TAG, "VivoAdapter: Settings.System write unavailable (${t.message})")
                 false
             }
         }

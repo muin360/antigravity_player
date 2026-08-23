@@ -20,14 +20,15 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 data class DynamicProfileState(
     val currentActiveProfileName: String = "Audiophile Master",
-    val triggerReason: String = "Automatic Route Matching: USB Audio DAC Connected",
+    val triggerReason: String = "Automatic Route Matching",
     val isAutoSwitchEnabled: Boolean = true,
-    val targetEndpoint: String = "External USB Audio DAC (Bit-Perfect)",
+    val targetEndpoint: String = "System Output",
+    // Honest capability wording (principle 16): no Bit-Perfect/clock-sync
+    // claims — those require runtime verification, not route inference.
     val appliedPolicies: List<String> = listOf(
-        "Auto-Switched to Bit-Perfect Passthrough",
-        "Hardware Clock Synced to Source Sampling Frequency",
-        "10-Band EQ Unhooked for Zero Phase Distortion",
-        "32-bit Float AudioSink Activated"
+        "Route-matched EQ profile applied",
+        "ReplayGain-aware gain staging",
+        "32-bit Float processing"
     )
 )
 
@@ -47,38 +48,38 @@ class DynamicProfileEngine(
         val (profileId, reason, policies) = when (routeType) {
             AudioOutputRouteType.USB_DAC, AudioOutputRouteType.USB_DEVICE -> Triple(
                 "usb_dac_direct",
-                "USB DAC Connected ➔ Direct Bit-Perfect Mode",
-                listOf("Bit-Perfect Passthrough", "Clock Synced to Source", "32-bit Float Sink")
+                "USB DAC Connected ➔ Direct Mode",
+                listOf("Direct-capable route selected", "32-bit Float Processing")
             )
             AudioOutputRouteType.WIRED_HEADPHONES, AudioOutputRouteType.WIRED_HEADSET -> Triple(
                 "iem_pure",
                 "Wired Headphones / 3.5mm Plugged ➔ IEM Pure Reference",
-                listOf("Harmon Target Curve EQ", "ReplayGain -14 LUFS", "Soft-Knee Limiter")
+                listOf("Harman Target Curve EQ", "ReplayGain-aware gain staging", "Soft-Knee Limiter available")
             )
             AudioOutputRouteType.BLUETOOTH_A2DP -> {
                 if (bluetoothCodec?.contains("LDAC", ignoreCase = true) == true) {
                     Triple(
                         "bluetooth_ldac",
-                        "LDAC Connected (990 kbps) ➔ LDAC Hi-Res Profile",
-                        listOf("High-Frequency Exciter", "24-bit 96kHz Fixed Clock", "Anti-Clipping Limiter")
+                        "LDAC Connected ➔ LDAC Profile",
+                        listOf("High-Frequency Exciter optional", "Anti-Clipping Limiter")
                     )
                 } else {
                     Triple(
                         "audiophile_master",
                         "Bluetooth Connected ➔ Adaptive Hi-Fi Profile",
-                        listOf("A2DP Acoustic Compensation", "Soft-Knee Limiter", "ReplayGain")
+                        listOf("A2DP Acoustic Compensation", "Soft-Knee Limiter available", "ReplayGain-aware gain staging")
                     )
                 }
             }
             AudioOutputRouteType.HDMI -> Triple(
                 "usb_dac_direct",
-                "HDMI Digital Connection ➔ Multichannel Bit-Perfect Passthrough",
-                listOf("Linear PCM Passthrough", "Clock Synced to Source", "32-bit Float Multi-Channel")
+                "HDMI Digital Connection ➔ Digital Output Mode",
+                listOf("Linear PCM output", "32-bit Float Processing")
             )
             else -> Triple(
                 "audiophile_master",
                 "Default Output ➔ Audiophile Master Reference",
-                listOf("Flat Studio Response", "Zero Phase Shift", "32-bit Float Sink")
+                listOf("Flat Studio Response", "32-bit Float Processing")
             )
         }
 

@@ -110,17 +110,6 @@ object AudioEngine {
             }
         }
 
-        // Trigger optional vendor probe in background if wired/USB
-        val routeType = newRoute?.routeType
-        if (routeType == AudioOutputRouteType.WIRED_HEADSET ||
-            routeType == AudioOutputRouteType.WIRED_HEADPHONES ||
-            routeType == AudioOutputRouteType.USB_DAC ||
-            routeType == AudioOutputRouteType.USB_DEVICE
-        ) {
-            val appContext = runCatching { context.applicationContext }.getOrNull() ?: context
-            runCatching { AudioInitializationCoordinator.triggerOptionalVendorProbe(appContext) }
-        }
-
         // Re-evaluate snapshot and update UI
         service?.refreshAudiophileState()
     }

@@ -72,7 +72,7 @@ class OboeStreamWrapper : public oboe::AudioStreamErrorCallback {
 public:
     uint64_t generationId = 0;
 
-    oboe::AudioStream *stream = nullptr;
+    std::shared_ptr<oboe::AudioStream> stream = nullptr;
     antigravity::AudiophileDsp dsp;
     antigravity::AudiophileResampler resampler;
     antigravity::DsdEngine dsd;
@@ -226,13 +226,21 @@ public:
         {
             std::lock_guard<std::mutex> lock(lifecycleMutex);
             if (stream && isActive.load(std::memory_order_acquire)) {
-                const auto state = stream->getState();
-                if (state == oboe::StreamState::Started) {
+                auto state = stream->getState();
+                // P0-6: Never issue flush() while state is Pausing or Started.
+                // Wait/observe until state reaches a legal flush state.
+                if (state == oboe::StreamState::Started || state == oboe::StreamState::Starting || state == oboe::StreamState::Pausing) {
                     stream->requestPause();
-                    stream->flush();
-                    stream->requestStart();
+                    oboe::StreamState nextState = oboe::StreamState::Unknown;
+                    stream->waitForStateChange(oboe::StreamState::Pausing, &nextState, 50 * 1000000LL);
+                    state = stream->getState();
+                }
+                
+                if (state == oboe::StreamState::Paused || state == oboe::StreamState::Open ||
+                    state == oboe::StreamState::Stopped || state == oboe::StreamState::Flushed) {
+                    stream->flush(50 * 1000000LL);
                 } else {
-                    stream->flush();
+                    LOGW("flush: skipped native flush due to stream state %s", oboe::convertToText(state));
                 }
             }
         }
@@ -294,7 +302,7 @@ public:
         }
 
         std::lock_guard<std::mutex> lock(lifecycleMutex);
-        oboe::AudioStream *s = stream;
+        oboe::AudioStream *s = stream.get();
         if (!s || !isActive.load(std::memory_order_acquire)) {
             return atomicPositionFrames.load(std::memory_order_relaxed);
         }
@@ -350,7 +358,7 @@ public:
              static_cast<unsigned long long>(generationId));
         isActive.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> lock(lifecycleMutex);
-        if (stream == audioStream) {
+        if (stream.get() == audioStream) {
             stream = nullptr;
         }
     }
@@ -450,34 +458,31 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     // the stream, closing the classic error-callback UAF window.
     builder.setErrorCallback(wrapper);
 
-    oboe::AudioStream *openedStream = nullptr;
-    oboe::Result result = builder.openStream(&openedStream);
+    oboe::Result result = builder.openStream(wrapper->stream);
 
     if (!bitPerfectMode && result != oboe::Result::OK) {
         LOGW("Requested open failed (%s); retrying in Shared mode.",
              oboe::convertToText(result));
         builder.setSharingMode(oboe::SharingMode::Shared);
-        result = builder.openStream(&openedStream);
+        result = builder.openStream(wrapper->stream);
     }
 
-    if (result != oboe::Result::OK || !openedStream) {
+    if (result != oboe::Result::OK || !wrapper->stream) {
         LOGE("Failed to open Oboe stream: %s", oboe::convertToText(result));
         return 0;
     }
 
-    wrapper->stream = openedStream;
-
-    result = openedStream->requestStart();
+    result = wrapper->stream->requestStart();
     if (result != oboe::Result::OK) {
         LOGE("Failed to start Oboe stream: %s", oboe::convertToText(result));
         wrapper->closeInternal();
         return 0;
     }
 
-    const int32_t actualChannels = openedStream->getChannelCount();
-    wrapper->actualRate.store(openedStream->getSampleRate(), std::memory_order_release);
-    wrapper->dsp.setSampleRate(static_cast<double>(openedStream->getSampleRate()));
-    wrapper->resampler.configure(sampleRate, openedStream->getSampleRate(),
+    const int32_t actualChannels = wrapper->stream->getChannelCount();
+    wrapper->actualRate.store(wrapper->stream->getSampleRate(), std::memory_order_release);
+    wrapper->dsp.setSampleRate(static_cast<double>(wrapper->stream->getSampleRate()));
+    wrapper->resampler.configure(sampleRate, wrapper->stream->getSampleRate(),
                                  actualChannels, antigravity::ResampleQuality::SINC_FAST);
 
     // Preallocate the fixed data-path buffers ONCE (P0-4/P0-16): the render
@@ -488,12 +493,12 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
         0.0f);
 
     LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d",
-         oboe::convertToText(openedStream->getAudioApi()),
-         (openedStream->getSharingMode() == oboe::SharingMode::Exclusive)
+         oboe::convertToText(wrapper->stream->getAudioApi()),
+         (wrapper->stream->getSharingMode() == oboe::SharingMode::Exclusive)
              ? "EXCLUSIVE" : "SHARED",
          static_cast<unsigned long long>(gen),
-         openedStream->getDeviceId(), sampleRate,
-         openedStream->getSampleRate());
+         wrapper->stream->getDeviceId(), sampleRate,
+         wrapper->stream->getSampleRate());
 
     return registerStream(wrapper);
 }
@@ -625,7 +630,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
             wrapper->dsp.process(scratch, numFrames, channelCount);
         }
 
-        oboe::AudioStream *activeStream = wrapper->stream;
+        oboe::AudioStream *activeStream = wrapper->stream.get();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
@@ -686,7 +691,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
                                                  std::memory_order_relaxed);
     }
 
-    oboe::AudioStream *activeStream = wrapper->stream;
+    oboe::AudioStream *activeStream = wrapper->stream.get();
     if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
@@ -743,7 +748,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         if (!bypassDsp) {
             wrapper->dsp.process(data, numFrames, channelCount);
         }
-        oboe::AudioStream *activeStream = wrapper->stream;
+        oboe::AudioStream *activeStream = wrapper->stream.get();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
             return kErrStaleOrWrite;
@@ -793,7 +798,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
                                                      std::memory_order_relaxed);
         }
 
-        oboe::AudioStream *activeStream = wrapper->stream;
+        oboe::AudioStream *activeStream = wrapper->stream.get();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
@@ -1141,14 +1146,14 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
     jmethodID constructor = env->GetMethodID(
         infoClass, "<init>",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IILjava/lang/String;"
-        "ILjava/lang/String;ZJI)V");
+        "IILjava/lang/String;ZJI)V");
     if (env->ExceptionCheck()) { env->ExceptionClear(); return nullptr; }
     if (!constructor) return nullptr;
 
     jobject infoObject = nullptr;
     {
         std::lock_guard<std::mutex> lock(wrapper->lifecycleMutex);
-        oboe::AudioStream *s = wrapper->stream;
+        oboe::AudioStream *s = wrapper->stream.get();
         if (!s || !wrapper->isActive.load(std::memory_order_acquire)) return nullptr;
 
         jstring api = env->NewStringUTF(oboe::convertToText(s->getAudioApi()));

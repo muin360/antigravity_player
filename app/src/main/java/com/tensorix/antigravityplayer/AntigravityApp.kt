@@ -5,20 +5,19 @@ import android.util.Log
 import com.tensorix.antigravityplayer.util.CrashDiagnostics
 
 /**
- * Antigravity Application Root
- * Initializes structured crash diagnostics and safe application configuration.
+ * Antigravity Application Root.
+ * Installs structured crash diagnostics; performs no main-thread work.
  */
 class AntigravityApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i("AntigravityPlayer", "══════════════════════════════════════════════════════════")
-        Log.i("AntigravityPlayer", "🚀 [ANTIGRAVITY AUDIO ENGINE] Core Engine Initializing...")
-        
-        // 1. Install global structured crash & anomaly handler
+        Log.i("AntigravityPlayer", "[STARTUP] Antigravity core initializing")
+
+        // Structured crash & anomaly handler (delegates to the platform
+        // handler after recording — never swallows crashes).
         CrashDiagnostics.installGlobalHandler(this)
-        
-        Log.i("AntigravityPlayer", "💎 [STARTUP] Application initialized safely without blocking main thread.")
-        Log.i("AntigravityPlayer", "══════════════════════════════════════════════════════════")
+
+        Log.i("AntigravityPlayer", "[STARTUP] Application initialized without blocking main thread")
     }
 }

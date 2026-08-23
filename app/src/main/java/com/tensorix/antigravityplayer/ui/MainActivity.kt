@@ -263,7 +263,7 @@ fun MainAppScreen(
     val isSampleRateMatching by viewModel.isSampleRateMatching.collectAsState()
     val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsState()
 
-    var currentTab by remember { mutableStateOf(0) }
+    var currentTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
     var showFullPlayer by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }

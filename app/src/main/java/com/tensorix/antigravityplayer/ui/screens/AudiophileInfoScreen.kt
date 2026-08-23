@@ -116,7 +116,7 @@ fun AudiophileInfoScreen(
         }
     }
 
-    val dynamicState by (PlaybackService.instance?.dynamicProfileEngine?.engineState ?: MutableStateFlow(null)).collectAsState()
+    val dynamicState by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.dynamicProfileEngine?.engineState, null)
 
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -280,8 +280,8 @@ fun AudiophileInfoScreen(
 
         // ROON-STYLE GLOWING SIGNAL CHAIN VISUALIZER
         val autoEqEngine = PlaybackService.instance?.autoEqEngine
-        val activeAutoEq by (autoEqEngine?.activeProfile ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
-        val isAutoEqOn by (autoEqEngine?.isAutoEqEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+        val activeAutoEq by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.activeProfile, null)
+        val isAutoEqOn by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.isAutoEqEnabled, false)
 
         Card(
             colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.9f)),

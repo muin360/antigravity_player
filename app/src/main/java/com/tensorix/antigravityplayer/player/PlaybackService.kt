@@ -7,7 +7,6 @@ import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Build
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import com.tensorix.antigravityplayer.audio.HiFiBadgeState
 import com.tensorix.antigravityplayer.audio.HardwareHiFiVerifier
@@ -71,9 +70,6 @@ class PlaybackService : MediaSessionService() {
         private set
 
     companion object {
-        const val CHANNEL_ID = "antigravity_playback_channel"
-        const val NOTIFICATION_ID = 1001
-
         private val _instanceFlow = MutableStateFlow<PlaybackService?>(null)
         val instanceFlow: StateFlow<PlaybackService?> = _instanceFlow.asStateFlow()
 
@@ -237,21 +233,9 @@ class PlaybackService : MediaSessionService() {
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
         dspProcessor.dvcVolume = initDvc
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = android.app.NotificationChannel(
-                CHANNEL_ID,
-                "Antigravity Playback",
-                android.app.NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Antigravity Music Player Playback Controls"
-                setShowBadge(false)
-            }
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
-            notificationManager?.createNotificationChannel(channel)
-        }
+
 
         buildAndAttachPlayer()
-        showPlaybackNotification("Antigravity Player ready", "Preparing audio pipeline")
         refreshAudiophileState()
     }
 
@@ -279,7 +263,6 @@ class PlaybackService : MediaSessionService() {
                 newPlayer.playWhenReady = playWhenReady
             }
             refreshAudiophileState()
-            showPlaybackNotification("Antigravity Player", if (playWhenReady) "Playing" else "Ready")
         }
     }
 
@@ -403,10 +386,10 @@ class PlaybackService : MediaSessionService() {
             .setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             .build()
 
-        if (_bitPerfectMode.value) {
-            val sampleRate = _currentTrackInfo.value.sampleRateHz
-            VendorDacManager.prepareHardwareForDirectPlayback(this, sampleRate)
-        }
+        // P0-11: vendor activation is NEVER part of playback construction.
+        // BitPerfect exclusive open works without OEM settings writes; the
+        // verifier reports truth. VendorDacManager stays reserved for the
+        // future explicit Hi-Fi phase (P1).
 
         val currentSessionId = exoPlayer.audioSessionId
         if (currentSessionId != 0) {
@@ -433,15 +416,6 @@ class PlaybackService : MediaSessionService() {
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 refreshAudiophileState()
-                showPlaybackNotification(
-                    "Antigravity Player",
-                    when (playbackState) {
-                        Player.STATE_BUFFERING -> "Buffering"
-                        Player.STATE_READY -> if (player?.playWhenReady == true) "Playing" else "Ready"
-                        Player.STATE_ENDED -> "Playback ended"
-                        else -> "Idle"
-                    }
-                )
             }
         })
         
@@ -486,19 +460,6 @@ class PlaybackService : MediaSessionService() {
         player = exoPlayer
         mediaSession = MediaSession.Builder(this, exoPlayer).build()
         refreshAudiophileState()
-    }
-
-    private fun showPlaybackNotification(title: String, text: String) {
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .build()
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
-        nm?.notify(NOTIFICATION_ID, notification)
     }
 
     fun updateCurrentTrackInfo(
@@ -551,25 +512,31 @@ class PlaybackService : MediaSessionService() {
             AudioEngine.updateSnapshot(applicationContext, trackInfo, isDspActive)
         }
         
-        // Auto-switch profile and Listening Mode based on dynamic route engine
+        // Auto-switch profile and Listening Mode based on dynamic route engine.
+        // Phase 13 dedupe: apply ONLY when the effective route type actually
+        // changed — playback-state transitions (buffering/ready/ended) must not
+        // rewrite EQ prefs or re-drive the DSP sync pipeline.
         if (_autoProfileSwitch.value) {
             val activeRoute = snapshot.output.activeRoute?.routeType ?: AudioOutputRouteType.SPEAKER
-            val profile = dynamicProfileEngine?.evaluateAndSwitch(activeRoute, null, trackInfo)
-            if (profile != null) {
-                equalizerEngine?.applyHiFiProfile(profile)
+            if (activeRoute != lastAutoAppliedRoute) {
+                lastAutoAppliedRoute = activeRoute
+                val profile = dynamicProfileEngine?.evaluateAndSwitch(activeRoute, null, trackInfo)
+                if (profile != null) {
+                    equalizerEngine?.applyHiFiProfile(profile)
 
-                when (activeRoute) {
-                    AudioOutputRouteType.USB_DAC, AudioOutputRouteType.USB_DEVICE -> {
-                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
-                    }
-                    AudioOutputRouteType.WIRED_HEADPHONES, AudioOutputRouteType.WIRED_HEADSET -> {
-                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE)
-                    }
-                    AudioOutputRouteType.BLUETOOTH_A2DP -> {
-                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.DYNAMIC)
-                    }
-                    else -> {
-                        equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
+                    when (activeRoute) {
+                        AudioOutputRouteType.USB_DAC, AudioOutputRouteType.USB_DEVICE -> {
+                            equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
+                        }
+                        AudioOutputRouteType.WIRED_HEADPHONES, AudioOutputRouteType.WIRED_HEADSET -> {
+                            equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE)
+                        }
+                        AudioOutputRouteType.BLUETOOTH_A2DP -> {
+                            equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.DYNAMIC)
+                        }
+                        else -> {
+                            equalizerEngine?.setListeningMode(com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE)
+                        }
                     }
                 }
             }
@@ -577,6 +544,9 @@ class PlaybackService : MediaSessionService() {
 
         logRouteProof()
     }
+
+    @Volatile
+    private var lastAutoAppliedRoute: AudioOutputRouteType? = null
 
     /**
      * P0-8: PROOF of the actual output device. Correlates the live native
@@ -687,8 +657,6 @@ class PlaybackService : MediaSessionService() {
         
         VendorDacManager.deactivate(applicationContext)
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
-        nm?.cancel(NOTIFICATION_ID)
         
         volumeReceiver?.let {
             runCatching { unregisterReceiver(it) }

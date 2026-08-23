@@ -579,28 +579,43 @@ class EqualizerEngine(private val context: Context) {
 
     fun applyHiFiProfile(profile: com.tensorix.antigravityplayer.audio.HiFiProfile) {
         _currentPresetName.value = profile.name
-        
-        // Sync 10-band EQ
+
+        // Phase 13 contamination fix: this used to perform 10 separate
+        // prefs.apply() disk writes + framework-effect writes on EVERY route
+        // evaluation. Now: compute once, skip when identical, persist via a
+        // SINGLE editor transaction.
         val newLevels = _bandLevels.value.toMutableList()
+        var levelsChanged = false
         profile.eqGainsDb.forEachIndexed { index, gain ->
             if (index < newLevels.size) {
                 val level = (gain * 100).toInt().toShort()
+                if (newLevels[index] != level) levelsChanged = true
                 newLevels[index] = level
                 dspProcessor?.setBandGain(index, gain)
-                equalizer?.let { eq ->
-                    if (index < eq.numberOfBands) {
-                        runCatching { eq.setBandLevel(index.toShort(), level) }
-                    }
-                }
-                prefs.edit().putInt("band_$index", level.toInt()).apply()
             }
         }
+
+        val targetBass = (profile.bassBoostDb * 100).toInt()
+        val targetTreble = (profile.trebleGainDb * 100).toInt()
+        val targetCrossfeed = if (profile.crossfeedEnabled) 0.5f else 0.0f
+
+        val unchanged = !levelsChanged &&
+            _bassBoostStrength.value.toInt() == targetBass &&
+            _trebleStrength.value.toInt() == targetTreble &&
+            _crossfeedLevel.value == targetCrossfeed
+
+        if (unchanged) return
+
+        prefs.edit().apply {
+            newLevels.forEachIndexed { index, level ->
+                putInt("band_$index", level.toInt())
+            }
+            putInt("bass_boost", targetBass)
+            putInt("treble_strength", targetTreble)
+        }.apply()
+
         _bandLevels.value = newLevels
-        
-        // Sync other DSP params
-        setBassBoost((profile.bassBoostDb * 100).toInt().toShort())
-        setTrebleStrength((profile.trebleGainDb * 100).toInt().toShort())
-        setCrossfeedLevel(if (profile.crossfeedEnabled) 0.5f else 0.0f)
+        setCrossfeedLevel(targetCrossfeed)
         setReplayGainEnabled(profile.replayGainEnabled)
         dspProcessor?.updateAllFiltersLive()
     }

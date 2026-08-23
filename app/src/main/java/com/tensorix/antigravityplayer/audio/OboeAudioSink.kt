@@ -79,11 +79,23 @@ class OboeAudioSink(
             internal set
     }
 
+    enum class SeekState {
+        IDLE,
+        REQUESTED,
+        FLUSHING,
+        REANCHORED,
+        WRITING,
+        STABLE
+    }
+
     // ------------------------------------------------------------------
     // Lifecycle state (guarded by lifecycleLock)
     // ------------------------------------------------------------------
     private val lifecycleLock = Any()
     private val opening = AtomicBoolean(false)
+
+    @Volatile
+    private var seekState: SeekState = SeekState.IDLE
 
     // Data-path snapshot: written under lifecycleLock, read lock-free by the
     // write path. Native validates generation, so a racing close is safe.
@@ -181,12 +193,13 @@ class OboeAudioSink(
     }
 
     override fun supportsFormat(format: Format): Boolean {
-        if (fallbackSink != null) return fallbackSink!!.supportsFormat(format)
+        val fb = fallbackSink
+        if (fb != null) return fb.supportsFormat(format)
         return Util.isEncodingLinearPcm(format.pcmEncoding)
     }
 
     override fun getFormatSupport(format: Format): Int {
-        if (fallbackSink != null) return fallbackSink!!.getFormatSupport(format)
+        
         return if (supportsFormat(format)) AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY else AudioSink.SINK_FORMAT_UNSUPPORTED
     }
 
@@ -197,7 +210,8 @@ class OboeAudioSink(
      *   no control-plane work (P0-12).
      */
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
-        if (fallbackSink != null) return fallbackSink!!.getCurrentPositionUs(sourceEnded)
+        val fb = fallbackSink
+        if (fb != null) return fb.getCurrentPositionUs(sourceEnded)
 
         val handle = streamHandle
         if (handle == 0L || mediaAnchorUs == C.TIME_UNSET) {
@@ -227,8 +241,9 @@ class OboeAudioSink(
             lastSpecifiedBufferSize = specifiedBufferSize
             lastOutputChannels = outputChannels
 
-            if (fallbackSink != null) {
-                fallbackSink!!.configure(inputFormat, specifiedBufferSize, outputChannels)
+            val existingFallback = fallbackSink
+            if (existingFallback != null) {
+                existingFallback.configure(inputFormat, specifiedBufferSize, outputChannels)
                 return
             }
 
@@ -292,28 +307,44 @@ class OboeAudioSink(
      * hardware queue, and let the next handleBuffer establish the new anchor.
      */
     override fun handleDiscontinuity() {
+        seekState = SeekState.REQUESTED
         mediaAnchorUs = C.TIME_UNSET
         lastReportedPositionUs = C.TIME_UNSET
         isDraining = false
-        runCatching { Log.i("SEEK", "handleDiscontinuity: clock invalidated, flushing sink") }
+        val seekStartMs = android.os.SystemClock.elapsedRealtime()
+        runCatching { Log.i("SEEK", "SEEK_START state=REQUESTED") }
         synchronized(lifecycleLock) {
+            seekState = SeekState.FLUSHING
             val handle = streamHandle
             if (handle != 0L) {
+                // Native flush leaves the stream legally PAUSED; restore the
+                // running state ourselves because Media3 will NOT re-issue
+                // play() for a seek during playback (P0-6 regression guard).
                 OboeBridge.flushStream(handle)
+                if (isPlaying) {
+                    OboeBridge.startStream(handle)
+                }
             }
         }
+        runCatching { Log.i("SEEK", "SEEK_END durationMs=${android.os.SystemClock.elapsedRealtime() - seekStartMs}") }
         fallbackSink?.handleDiscontinuity()
     }
 
     override fun flush() {
+        seekState = SeekState.REQUESTED
         mediaAnchorUs = C.TIME_UNSET
         lastReportedPositionUs = C.TIME_UNSET
         isDraining = false
-        runCatching { Log.i("SEEK", "flush: clock invalidated, flushing sink") }
+        runCatching { Log.i("SEEK", "flush: clock invalidated, state=REQUESTED") }
         synchronized(lifecycleLock) {
+            seekState = SeekState.FLUSHING
             val handle = streamHandle
             if (handle != 0L) {
                 OboeBridge.flushStream(handle)
+                if (isPlaying) {
+                    // See handleDiscontinuity(): native flush ends PAUSED.
+                    OboeBridge.startStream(handle)
+                }
             }
         }
         fallbackSink?.flush()
@@ -323,6 +354,7 @@ class OboeAudioSink(
         synchronized(lifecycleLock) {
             isPlaying = false
             isDraining = false
+            seekState = SeekState.IDLE
             mediaAnchorUs = C.TIME_UNSET
             lastReportedPositionUs = C.TIME_UNSET
             nativeUnsupported = false
@@ -335,6 +367,7 @@ class OboeAudioSink(
 
     override fun release() {
         synchronized(lifecycleLock) {
+            seekState = SeekState.IDLE
             closeOboeStreamLocked()
             currentActiveHandle = 0L
             currentStreamInfo = null
@@ -351,7 +384,8 @@ class OboeAudioSink(
         encodedAccessUnitCount: Int
     ): Boolean {
         if (fallbackSink != null) {
-            return fallbackSink!!.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            val fb = fallbackSink ?: return false
+            return fb.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
         }
 
         // ---- Lazy open WITHOUT holding the lifecycle lock (P0-3) ----
@@ -385,10 +419,12 @@ class OboeAudioSink(
                 ?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
         }
 
-        // ---- Clock anchoring (P0-6.1): first frame of the new timeline ----
-        if (mediaAnchorUs == C.TIME_UNSET) {
+        // ---- Clock anchoring & seek state machine (P0-6) ----
+        if (seekState == SeekState.REQUESTED || seekState == SeekState.FLUSHING || mediaAnchorUs == C.TIME_UNSET) {
             mediaAnchorUs = presentationTimeUs
-            lastReportedPositionUs = C.TIME_UNSET
+            lastReportedPositionUs = presentationTimeUs
+            seekState = SeekState.REANCHORED
+            runCatching { Log.i("SEEK", "handleBuffer: re-anchored mediaAnchorUs=$presentationTimeUs state=REANCHORED") }
         }
 
         val initialPosition = buffer.position()
@@ -416,6 +452,8 @@ class OboeAudioSink(
             buffer.position(initialPosition + usableBytes)
             return true
         }
+
+        seekState = SeekState.WRITING
 
         // ---- Lock-free PCM write (P0-3) ----
         val framesWrittenResult = if (buffer.isDirect) {
@@ -454,6 +492,7 @@ class OboeAudioSink(
 
         when {
             framesWrittenResult > 0 -> {
+                seekState = SeekState.STABLE
                 // Advance by EXACTLY the input frames native reports consuming;
                 // sub-frame remainder was dropped above.
                 val bytesConsumed = framesWrittenResult * bytesPerFrame
@@ -496,7 +535,8 @@ class OboeAudioSink(
      * output consumed -> ended. Pause alone NEVER implies ended.
      */
     override fun isEnded(): Boolean {
-        if (fallbackSink != null) return fallbackSink!!.isEnded
+        val fb = fallbackSink
+        if (fb != null) return fb.isEnded
         if (streamHandle == 0L) return isDraining
         return isDraining && !hasPendingData()
     }
@@ -508,7 +548,8 @@ class OboeAudioSink(
      * handle existence as a proxy.
      */
     override fun hasPendingData(): Boolean {
-        if (fallbackSink != null) return fallbackSink!!.hasPendingData()
+        val fb = fallbackSink
+        if (fb != null) return fb.hasPendingData()
         val handle = streamHandle
         if (handle == 0L) return false
 
@@ -689,11 +730,31 @@ class OboeAudioSink(
         currentStreamInfo = OboeBridge.getNativeStreamInfo(handle)
 
         val exclusive = OboeBridge.isExclusive(handle)
+        val routeConf =
+            if (currentStreamInfo?.deviceId != null && currentStreamInfo?.deviceId != 0) "VERIFIED" else "UNKNOWN"
+        // Phase 3 rate domains: SOURCE (decoder/format) vs NATIVE (stream).
+        // When they differ, OUR resampler is ACTIVE. When they match but the
+        // HAL mixer runs at another rate, AAudio's flowgraph performs the
+        // conversion inside AudioFlinger (visible as 44100->48000 flowgraph
+        // logs) — our resampler stays PASSTHROUGH and BitPerfect remains
+        // unavailable because the endpoint rate differs from source.
+        val resamplerState =
+            if (actualOutputSampleRate > 0 && sampleRate != actualOutputSampleRate) "ACTIVE"
+            else "PASSTHROUGH"
         runCatching {
             Log.i(
                 TAG_LOG,
                 "STREAM_OPENED: handle=$streamHandle gen=$streamGeneration exclusive=$exclusive " +
                     "rate=$actualOutputSampleRate dev=${currentStreamInfo?.deviceId} bp=$bitPerfectMode"
+            )
+            Log.i(
+                TAG_LOG,
+                "ROUTE_TELEMETRY: requestedDeviceId=$targetDevice " +
+                    "nativeDeviceId=${currentStreamInfo?.deviceId} " +
+                    "matchedAudioDeviceId=${preferredDevice?.id} routeType=${preferredDevice?.type} " +
+                    "routeConfidence=$routeConf sharingMode=${currentStreamInfo?.sharingMode} " +
+                    "sourceSampleRate=$sampleRate nativeSampleRate=$actualOutputSampleRate " +
+                    "resampler=$resamplerState channels=$channelCount api=${currentStreamInfo?.api}"
             )
         }
 
