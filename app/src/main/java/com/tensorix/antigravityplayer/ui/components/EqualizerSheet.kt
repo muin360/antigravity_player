@@ -342,7 +342,7 @@ fun EqualizerSheet(
                         modifier = Modifier.width(48.dp)
                     ) {
                         Text(
-                            text = String.format("%.1f", dbValue),
+                            text = String.format(java.util.Locale.US, "%.1f", dbValue),
                             fontSize = 11.sp,
                             color = if (isEnabled) PrimaryCyan else TextSecondary,
                             fontWeight = FontWeight.Bold
@@ -390,7 +390,7 @@ fun EqualizerSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Digital Pre-Amp", color = TextPrimary, fontSize = 14.sp)
-                    Text(String.format("%.1f dB", preAmpGain), color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(String.format(java.util.Locale.US, "%.1f dB", preAmpGain), color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Slider(
                     value = preAmpGain,
@@ -435,7 +435,7 @@ fun EqualizerSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Clarity / Presence", color = TextPrimary, fontSize = 14.sp)
-                    Text(String.format("%.1f dB", clarityGain), color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(String.format(java.util.Locale.US, "%.1f dB", clarityGain), color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Slider(
                     value = clarityGain,
@@ -454,7 +454,7 @@ fun EqualizerSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Ultimate Air Presence", color = TextPrimary, fontSize = 14.sp)
-                    Text("${String.format("%.1f", airPresence)} dB", color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("${String.format(java.util.Locale.US, "%.1f", airPresence)} dB", color = PrimaryCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Slider(
                     value = airPresence,
@@ -590,7 +590,7 @@ fun EqualizerSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Safety Limiter (dB)", color = TextPrimary, fontSize = 14.sp)
-                    Text(String.format("%.1f dB", limiterThreshold), color = SecondaryViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(String.format(java.util.Locale.US, "%.1f dB", limiterThreshold), color = SecondaryViolet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Slider(
                     value = limiterThreshold,

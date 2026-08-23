@@ -113,11 +113,12 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                         }
                         bitrate = (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0) / 1000
 
-                        val sampleRateKey = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            MediaMetadataRetriever.METADATA_KEY_SAMPLERATE
-                        } else 24
+                        // METADATA_KEY_SAMPLERATE requires API 31; the old
+                        // fallback constant 24 was CAPTURE_FRAMERATE (wrong key!).
+                        val sampleRateKey = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            MediaMetadataRetriever.METADATA_KEY_SAMPLERATE else -1
 
-                        sampleRate = retriever.extractMetadata(sampleRateKey)?.toIntOrNull() ?: 0
+                        sampleRate = if (sampleRateKey >= 0) retriever.extractMetadata(sampleRateKey)?.toIntOrNull() ?: 0 else 0
                     } catch (e: Exception) {
                         // Silently continue if retriever unsupported for this item
                     } finally {

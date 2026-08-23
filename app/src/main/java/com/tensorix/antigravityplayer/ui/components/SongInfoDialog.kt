@@ -47,8 +47,8 @@ fun SongInfoDialog(
         else -> "LOSSLESS PCM"
     }
     val fileSizeMb = when {
-        file?.exists() == true -> String.format("%.2f MB", file.length() / (1024f * 1024f))
-        song.fileSize > 0L -> String.format("%.2f MB", song.fileSize / (1024f * 1024f))
+        file?.exists() == true -> String.format(java.util.Locale.US, "%.2f MB", file.length() / (1024f * 1024f))
+        song.fileSize > 0L -> String.format(java.util.Locale.US, "%.2f MB", song.fileSize / (1024f * 1024f))
         else -> "N/A"
     }
 

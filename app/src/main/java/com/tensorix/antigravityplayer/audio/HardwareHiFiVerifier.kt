@@ -106,7 +106,7 @@ object HardwareHiFiVerifier {
                     false
                 }
             }
-            // Android 10–12 (API 29–32): AudioTrack method
+            // Android 10â€“12 (API 29â€“32): AudioTrack method
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
                 runCatching {
                     val format = AudioFormat.Builder()
@@ -123,7 +123,7 @@ object HardwareHiFiVerifier {
                     method.invoke(null, format, attr) as? Boolean ?: false
                 }.getOrDefault(false)
             }
-            // Android 8.0–9 (API 26–28): reflection + HAL parameters
+            // Android 8.0â€“9 (API 26â€“28): reflection + HAL parameters
             else -> {
                 runCatching {
                     val params = audioManager.getParameters("direct_pcm")
@@ -222,7 +222,7 @@ object HardwareHiFiVerifier {
             limitations.add("DSP Engine is modifying PCM samples")
         }
         if (!isDirectActive && trackSampleRate > 0 && trackSampleRate != systemSampleRate) {
-            limitations.add("System resamples track ($trackSampleRate Hz ➔ $systemSampleRate Hz)")
+            limitations.add("System resamples track ($trackSampleRate Hz âž” $systemSampleRate Hz)")
         }
 
         val report = HardwareVerificationReport(
@@ -343,22 +343,41 @@ object HardwareHiFiVerifier {
             Log.w("AntigravityAudioAudit", "[PROBE] Method C error: ${e.message}")
         }
 
-        try {
-            val audioSystemClass = Class.forName("android.media.AudioSystem")
-            val getOutputMethod = audioSystemClass.getMethod(
-                "getOutput",
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType
-            )
-            val outputHandle = getOutputMethod.invoke(null, 3, targetRate, 1, AudioFormat.CHANNEL_OUT_STEREO, AUDIO_OUTPUT_FLAG_DIRECT) as? Int
-            if (outputHandle != null && outputHandle > 0) {
-                details.add("AudioSystem direct output handle confirmed: #$outputHandle")
-                return true
-            }
-        } catch (_: Exception) {
+        // Hidden-API AudioSystem reflection removed (Lint PrivateApi).
+        // Public-API probes only: getDirectPlaybackSupport (API 33+) or
+        // AudioTrack.isDirectOutputSupported (API 29-32); below 29 -> UNKNOWN.
+        val fmt = android.media.AudioFormat.Builder()
+            .setSampleRate(targetRate)
+            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
+            .build()
+        val attr = android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+
+        val supported = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                val m = am?.javaClass?.getMethod(
+                    "getDirectPlaybackSupport",
+                    android.media.AudioFormat::class.java,
+                    android.media.AudioAttributes::class.java
+                )
+                ((m?.invoke(am, fmt, attr) as? Int) ?: 0) != 0
+            } else if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val m = android.media.AudioTrack::class.java.getMethod(
+                    "isDirectOutputSupported",
+                    android.media.AudioFormat::class.java,
+                    android.media.AudioAttributes::class.java
+                )
+                m.invoke(null, fmt, attr) as? Boolean ?: false
+            } else false
+        }.getOrDefault(false)
+
+        if (supported) {
+            details.add("Public direct-output probe confirmed for $targetRate Hz")
+            return true
         }
 
         return false
@@ -463,57 +482,6 @@ object HardwareHiFiVerifier {
     /**
      * Executes targeted runtime experiments across sample rates, formats, buffer sizes, and flags.
      */
-    fun executeDirectPcmMatrixExperiments(context: Context) {
-        val sampleRates = listOf(44100, 48000, 96000, 192000)
-        // Native AOSP audio_format_t values:
-        // PCM_16_BIT = 1, PCM_8_24_BIT = 2, PCM_32_BIT = 3, PCM_FLOAT = 4, PCM_24_BIT_PACKED = 6
-        val formats = listOf(
-            Pair("PCM_16_BIT", 1),
-            Pair("PCM_24_BIT_PACKED", 6),
-            Pair("PCM_8_24_BIT", 2),
-            Pair("PCM_32_BIT", 3),
-            Pair("PCM_FLOAT", 4)
-        )
-        val flags = listOf(
-            Pair("FLAG_DIRECT (0x1)", 1),
-            Pair("FLAG_DIRECT_PCM (0x2000)", 0x2000),
-            Pair("FLAG_FAST (0x4)", 4),
-            Pair("FLAG_NONE (0x0)", 0)
-        )
-
-        Log.i("AntigravityDirectExperiment", "==================== RUNNING DIRECT PCM MATRIX EXPERIMENTS ====================")
-
-        try {
-            val audioSystemClass = Class.forName("android.media.AudioSystem")
-            val getOutputMethod = audioSystemClass.declaredMethods.find { it.name == "getOutput" }
-            getOutputMethod?.isAccessible = true
-
-            for (rate in sampleRates) {
-                for (fmt in formats) {
-                    for (flg in flags) {
-                        try {
-                            val handle = if (getOutputMethod != null) {
-                                when (getOutputMethod.parameterTypes.size) {
-                                    5 -> getOutputMethod.invoke(null, 3, rate, fmt.second, 3, flg.second)
-                                    6 -> getOutputMethod.invoke(null, 3, rate, fmt.second, 3, flg.second, 0)
-                                    else -> null
-                                } as? Int
-                            } else null
-
-                            val isSuccess = handle != null && handle > 0
-                            val status = if (isSuccess) "SUCCESS (Handle #$handle)" else "FAILED (No Route / Rejected)"
-                            Log.i("AntigravityDirectExperiment", "[EXP] Rate=${rate}Hz | Format=${fmt.first} | Flags=${flg.first} -> $status")
-                        } catch (e: Exception) {
-                            Log.i("AntigravityDirectExperiment", "[EXP] Rate=${rate}Hz | Format=${fmt.first} | Flags=${flg.first} -> EXCEPTION: ${e.message}")
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("AntigravityDirectExperiment", "Failed to run AudioSystem reflection experiments: ${e.message}")
-        }
-        Log.i("AntigravityDirectExperiment", "================================================================================")
-    }
 
     private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 }

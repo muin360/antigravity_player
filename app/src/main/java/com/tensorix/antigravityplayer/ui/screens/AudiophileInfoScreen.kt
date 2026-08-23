@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.tensorix.antigravityplayer.ui.screens
 
 import com.tensorix.antigravityplayer.audio.VendorDacManager
@@ -610,7 +612,7 @@ fun AudiophileInfoScreen(
                     SpecItem("Buffer Latency", if (output.latencyMs > 0) "${output.latencyMs} ms" else "UNAVAILABLE (HAL)")
                     
                     val dvcVol = PlaybackService.instance?.dspProcessor?.dvcVolume ?: 1.0
-                    SpecItem("DVC Unity", String.format("%.0f%%", dvcVol * 100))
+                    SpecItem("DVC Unity", String.format(java.util.Locale.US, "%.0f%%", dvcVol * 100))
                     SpecItem("Direct Path", if (hardwareReport.isDirectOutputSupported) "Direct HAL" else "AudioFlinger")
                 }
             }

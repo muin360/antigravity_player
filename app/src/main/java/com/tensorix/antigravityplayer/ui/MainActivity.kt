@@ -95,7 +95,9 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val audioGranted = permissions[Manifest.permission.READ_MEDIA_AUDIO] ?: false
+        val audioGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            permissions[Manifest.permission.READ_MEDIA_AUDIO] ?: false
+        } else false
         val storageGranted = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] ?: false
         val hasMediaAccess = audioGranted || storageGranted
         
