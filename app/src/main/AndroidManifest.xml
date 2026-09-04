@@ -24,7 +24,9 @@
     <!-- Required for writing Vivo/OEM Hi-Fi settings -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
-    <application`n        android:enableOnBackInvokedCallback="true"`n        android:name=".AntigravityApp"
+    <application
+        android:enableOnBackInvokedCallback="true"
+        android:name=".AntigravityApp"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"

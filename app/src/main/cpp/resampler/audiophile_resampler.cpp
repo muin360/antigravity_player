@@ -99,12 +99,14 @@ void AudiophileResampler::reset() {
 
 void AudiophileResampler::migrateTo(const Config &cfg) {
     timePos_ = 0.0;
-    historyBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES) * cfg.channelCount, 0.0f);
-    workBuffer_.clear();
+    const size_t ch = static_cast<size_t>(std::max(1, cfg.channelCount));
+    historyBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES) * ch, 0.0f);
+    workBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES + MAX_INPUT_FRAMES) * ch, 0.0f);
+    outputBuffer_.assign(static_cast<size_t>(MAX_OUTPUT_FRAMES) * ch, 0.0f);
 }
 
 AudiophileResampler::Result AudiophileResampler::process(
-    const float *inData, int32_t inFrames, std::vector<float> &outBuffer) {
+    const float *inData, int32_t inFrames) {
 
     Result result;
     if (!inData || inFrames <= 0) return result;
@@ -126,34 +128,32 @@ AudiophileResampler::Result AudiophileResampler::process(
     const int32_t ch = cfg->channelCount;
 
     if (cfg->passThrough) {
-        const size_t totalSamples = static_cast<size_t>(inFrames) * ch;
-        if (outBuffer.size() < totalSamples) outBuffer.resize(totalSamples);
-        std::copy(inData, inData + totalSamples, outBuffer.begin());
+        // Direct zero-copy pass-through: caller receives the exact input pointer
         result.outputFrames = inFrames;
         result.inputFramesConsumed = inFrames;
+        result.outputData = inData;
         return result;
     }
+
+    // Safety clamp to guaranteed preallocated capacity: NEVER reallocate on audio thread
+    const int32_t clampedInFrames = std::min(inFrames, MAX_INPUT_FRAMES);
 
     const double ratio = cfg->ratio;
     const int taps = cfg->taps;
     const int halfTaps = cfg->halfTaps;
-    const int32_t estimatedOutFrames =
-        static_cast<int32_t>(std::ceil(inFrames / ratio)) + 4;
-    const size_t neededOut = static_cast<size_t>(estimatedOutFrames) * ch;
-    if (outBuffer.size() < neededOut) outBuffer.resize(neededOut);
 
     const int32_t historyFrames = MAX_HISTORY_FRAMES;
-    const int32_t totalWorkFrames = historyFrames + inFrames;
-    const size_t totalWorkSamples = static_cast<size_t>(totalWorkFrames) * ch;
-    if (workBuffer_.size() < totalWorkSamples) workBuffer_.resize(totalWorkSamples * 2);
+    const int32_t totalWorkFrames = historyFrames + clampedInFrames;
 
     std::copy(historyBuffer_.begin(), historyBuffer_.end(), workBuffer_.begin());
-    std::copy(inData, inData + static_cast<size_t>(inFrames) * ch,
+    std::copy(inData, inData + static_cast<size_t>(clampedInFrames) * ch,
               workBuffer_.begin() + historyBuffer_.size());
 
     int32_t outFrameCount = 0;
+    const int32_t maxOutFrames = MAX_OUTPUT_FRAMES;
+    float *outBuffer = outputBuffer_.data();
 
-    while (timePos_ + halfTaps < inFrames) {
+    while (timePos_ + halfTaps < clampedInFrames && outFrameCount < maxOutFrames) {
         const double currentInTime = historyFrames + timePos_;
         const int32_t baseInFrame = static_cast<int32_t>(std::floor(currentInTime));
         const double frac = currentInTime - baseInFrame;
@@ -213,7 +213,7 @@ AudiophileResampler::Result AudiophileResampler::process(
         timePos_ += ratio;
     }
 
-    timePos_ -= inFrames;
+    timePos_ -= clampedInFrames;
 
     // Save tail to history buffer for the next block.
     const int32_t copyStartFrame = std::max(0, totalWorkFrames - historyFrames);
@@ -225,13 +225,9 @@ AudiophileResampler::Result AudiophileResampler::process(
         }
     }
 
-    if (outBuffer.size() > static_cast<size_t>(outFrameCount) * ch) {
-        outBuffer.resize(static_cast<size_t>(outFrameCount) * ch);
-    }
     result.outputFrames = outFrameCount;
-    // All input was either emitted or folded into the history/timePos state:
-    // nothing is dropped or duplicated across calls.
-    result.inputFramesConsumed = inFrames;
+    result.inputFramesConsumed = clampedInFrames;
+    result.outputData = outBuffer;
     return result;
 }
 

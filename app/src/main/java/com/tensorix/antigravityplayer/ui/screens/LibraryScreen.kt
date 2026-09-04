@@ -187,7 +187,7 @@ fun LibraryScreen(
                     expanded = sortMenuExpanded,
                     onDismissRequest = { sortMenuExpanded = false }
                 ) {
-                    SortOrder.values().fastForEach { order ->
+                    SortOrder.values().forEach { order ->
                         DropdownMenuItem(
                             text = {
                                 val indicator = if (sortOrder == order) (if (isSortAscending) " ↑" else " ↓") else ""
@@ -316,4 +316,5 @@ fun LibraryScreen(
         )
     }
 }
+
 

@@ -244,7 +244,7 @@ fun AudiophileInfoScreen(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    com.tensorix.antigravityplayer.audio.ListeningMode.values().fastForEach { mode ->
+                    com.tensorix.antigravityplayer.audio.ListeningMode.values().forEach { mode ->
                         val isSelected = (mode == currentMode)
                         Box(
                             modifier = Modifier
@@ -1043,7 +1043,7 @@ fun AudiophileInfoScreen(
                 if (hardwareReport.limitations.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text("HAL & AudioFlinger Limitations:", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    hardwareReport.limitations.fastForEach { limitation ->
+                    hardwareReport.limitations.forEach { limitation ->
                         Row(modifier = Modifier.padding(vertical = 1.dp)) {
                             Text("• ", color = Color(0xFFFFAB00), fontSize = 11.sp)
                             Text(limitation, color = TextSecondary, fontSize = 11.sp)
@@ -1066,7 +1066,7 @@ fun AudiophileInfoScreen(
                     Text("CONNECTED USB AUDIO HARDWARE", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    output.connectedUsbDacs.fastForEach { dac ->
+                    output.connectedUsbDacs.forEach { dac ->
                         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                             Column {
                                 Text(dac.productName ?: "USB DAC", color = PrimaryCyan, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
@@ -1143,7 +1143,7 @@ fun AudiophileInfoScreen(
                 if (output.deviceLimitations.isEmpty()) {
                     Text("✓ No hardware bottlenecks detected. Audio path operating at peak fidelity.", color = TextPrimary, fontSize = 12.sp)
                 } else {
-                    output.deviceLimitations.fastForEach { limitation ->
+                    output.deviceLimitations.forEach { limitation ->
                         Row(modifier = Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.Top) {
                             Text("• ", color = SecondaryViolet, fontWeight = FontWeight.Bold)
                             Text(limitation, color = TextSecondary, fontSize = 12.sp)
@@ -1494,6 +1494,7 @@ private fun SignalChainNode(
         }
     }
 }
+
 
 
 

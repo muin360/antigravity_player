@@ -130,6 +130,49 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     val currentSampleRate: Int
         get() = if (inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) inputAudioFormat.sampleRate else 0
 
+    // Rule 8: Explicit state query model for DSP stages
+    val isEqActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && bandGainsDb.any { it < -0.01 || it > 0.01 }
+
+    val isBassBoostActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && bassBoostGainDb > 0.01
+
+    val isTrebleActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && trebleGainDb > 0.01
+
+    val isClarityActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && clarityEnhancerGain > 0.01
+
+    val isHarmonicActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && harmonicExciterLevel > 0.001
+
+    val isStereoExpansionActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && (stereoExpansionMultiplier < 0.99 || stereoExpansionMultiplier > 1.01)
+
+    val isSaturationActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && (warmSaturationLevel > 0.001 || triodeWarmthLevel > 0.001 || pentodeTapeLevel > 0.001)
+
+    val isCrossfeedActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && crossfeedLevel > 0.001
+
+    val isSubBassMonoActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && subBassMonoEnabled
+
+    val isLimiterActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && limiterEnabled
+
+    val isDitherActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && ditherStrength > 0.0001
+
+    val isChannelBalanceActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && (channelBalance < -0.01 || channelBalance > 0.01)
+
+    val isInvertPhaseActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && invertPhase
+
+    val isAirPresenceActive: Boolean
+        get() = isEnabled && !isBitPerfectBypass && airPresenceGainDb > 0.01
+
     // 10-Band EQ Gains in dB (-15.0 to +15.0 dB)
     private val bandGainsDb = DoubleArray(10)
     private val bandCenterFreqs = doubleArrayOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)

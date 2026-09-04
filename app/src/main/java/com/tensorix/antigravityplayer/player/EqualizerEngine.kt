@@ -202,35 +202,64 @@ class EqualizerEngine(private val context: Context) {
         val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
         if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
             try {
-                com.tensorix.antigravityplayer.audio.OboeBridge.setDspEnabled(handle, _isEnabled.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setBitPerfectBypass(handle, _isBitPerfectBypass.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setPreAmpGainDb(handle, _preAmpGainDb.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setBassBoostGainDb(handle, (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setTrebleGainDb(handle, (_trebleStrength.value.toDouble() / 1500.0) * 15.0)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setHarmonicExciterLevel(handle, if (_isTurboSharpness.value) 0.25 else 0.0)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setClarityEnhancerGain(handle, _clarityGain.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setStereoExpansionMultiplier(handle, _stereoExpansion.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setWarmSaturationLevel(handle, _warmSaturation.value.toDouble())
-                // Full parity with OboeAudioSink.syncDspParameters: these were
-                // previously missing from the live path (only applied at next
-                // stream open).
-                com.tensorix.antigravityplayer.audio.OboeBridge.setTriodeWarmthLevel(handle, _warmSaturation.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setPentodeTapeLevel(handle, dspProcessor?.pentodeTapeLevel ?: 0.0)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setDitherStrength(handle, if (_isBitPerfectBypass.value) 0.0 else dspProcessor?.ditherStrength ?: 0.0)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setOutputBitDepth(handle, dspProcessor?.outputBitDepth ?: 24)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setAirPresenceGainDb(handle, _airPresence.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setCrossfeedLevel(handle, _crossfeedLevel.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setLimiterEnabled(handle, _isTurboSharpness.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setLimiterThresholdDb(handle, _limiterThreshold.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setSubBassMonoEnabled(handle, _subBassMono.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setChannelBalance(handle, _channelBalance.value.toDouble())
-                com.tensorix.antigravityplayer.audio.OboeBridge.setInvertPhase(handle, _invertPhase.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setHrtfSpatialEnabled(handle, _hrtfSpatialEnabled.value)
-                com.tensorix.antigravityplayer.audio.OboeBridge.setHrtfRoomSize(handle, _hrtfRoomSize.value.toDouble())
-
-                _bandLevels.value.forEachIndexed { index, level ->
-                    com.tensorix.antigravityplayer.audio.OboeBridge.setBandGain(handle, index, level.toDouble() / 100.0)
+                val isBypass = _isBitPerfectBypass.value
+                val isEnabled = _isEnabled.value
+                val dsp = dspProcessor
+                val eqBands = DoubleArray(10) { idx ->
+                    if (isBypass) 0.0 else (_bandLevels.value.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
                 }
+
+                val flags = booleanArrayOf(
+                    !isBypass && isEnabled && eqBands.any { it < -0.01 || it > 0.01 }, // 0: eqActive
+                    !isBypass && isEnabled && (PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true), // 1: autoEqActive
+                    !isBypass && isEnabled && (dsp?.isEqActive == true), // 2: peqActive
+                    !isBypass && isEnabled && _isTurboSharpness.value,    // 3: limiterActive
+                    !isBypass && isEnabled && (dsp?.isDitherActive == true), // 4: ditherActive
+                    !isBypass && isEnabled && (dsp != null && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001)), // 5: replayGainActive
+                    !isBypass && isEnabled && _crossfeedLevel.value > 0.001, // 6: crossfeedActive
+                    !isBypass && isEnabled && (_channelBalance.value < -0.01 || _channelBalance.value > 0.01), // 7: balanceActive
+                    !isBypass && isEnabled && _hrtfSpatialEnabled.value, // 8: spatialActive
+                    !isBypass && isEnabled && _bassBoostStrength.value > 10, // 9: bassBoostActive
+                    !isBypass && isEnabled && _trebleStrength.value > 10,   // 10: trebleActive
+                    !isBypass && isEnabled && _clarityGain.value > 0.01,    // 11: clarityActive
+                    !isBypass && isEnabled && _isTurboSharpness.value,      // 12: harmonicExciterActive
+                    !isBypass && isEnabled && _warmSaturation.value > 0.001,// 13: saturationActive
+                    !isBypass && isEnabled && (_stereoExpansion.value < 0.99 || _stereoExpansion.value > 1.01), // 14: stereoExpansionActive
+                    !isBypass && isEnabled && _subBassMono.value,          // 15: subBassMonoActive
+                    false                                                 // 16: channelTransformActive
+                )
+
+                val doubleParams = DoubleArray(27)
+                doubleParams[0] = if (isBypass) 0.0 else _preAmpGainDb.value.toDouble()
+                doubleParams[1] = if (isBypass) 0.0 else (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0
+                doubleParams[2] = if (isBypass) 0.0 else (_trebleStrength.value.toDouble() / 1500.0) * 15.0
+                doubleParams[3] = if (isBypass) 0.0 else if (_isTurboSharpness.value) 0.25 else 0.0
+                doubleParams[4] = if (isBypass) 0.0 else _clarityGain.value.toDouble()
+                doubleParams[5] = if (isBypass) 1.0 else _stereoExpansion.value.toDouble()
+                doubleParams[6] = if (isBypass) 1.0 else (dsp?.dvcVolume ?: 1.0)
+                doubleParams[7] = if (isBypass) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
+                doubleParams[8] = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0)
+                doubleParams[9] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
+                doubleParams[10] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
+                doubleParams[11] = if (isBypass) 0.0 else (dsp?.pentodeTapeLevel ?: 0.0)
+                doubleParams[12] = if (isBypass) 0.0 else _crossfeedLevel.value.toDouble()
+                doubleParams[13] = if (isBypass) 0.0 else _limiterThreshold.value.toDouble()
+                doubleParams[14] = if (isBypass) 0.0 else _channelBalance.value.toDouble()
+                doubleParams[15] = if (isBypass) 0.0 else _airPresence.value.toDouble()
+                doubleParams[16] = if (isBypass) 0.5 else _hrtfRoomSize.value.toDouble()
+                for (i in 0 until 10) {
+                    doubleParams[17 + i] = eqBands[i]
+                }
+
+                com.tensorix.antigravityplayer.audio.OboeBridge.setDspParametersBatch(
+                    handle = handle,
+                    enabled = !isBypass && isEnabled,
+                    bitPerfectBypass = isBypass,
+                    activeFlags = flags,
+                    params = doubleParams,
+                    outputBitDepth = dsp?.outputBitDepth ?: 24,
+                    invertPhase = !isBypass && _invertPhase.value
+                )
             } catch (e: Exception) {
                 Log.w("EqualizerEngine", "Native DSP sync notice: ${e.message}")
             }

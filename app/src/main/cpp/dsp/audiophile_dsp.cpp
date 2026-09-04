@@ -68,32 +68,57 @@ void AudiophileDsp::setBitPerfectBypass(bool bypass) {
 }
 
 void AudiophileDsp::setPreAmpGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) { p.preAmpGainDb = gainDb; });
+    mutateParams([&](DspParams &p) {
+        p.preAmpGainDb = gainDb;
+        p.preampActive = (std::abs(gainDb) > 0.001);
+    });
 }
 
 void AudiophileDsp::setBandGain(int bandIndex, double gainDb) {
     if (bandIndex < 0 || bandIndex >= static_cast<int>(kNumBands)) return;
-    mutateParams([&](DspParams &p) { p.bandGainsDb[bandIndex] = gainDb; });
+    mutateParams([&](DspParams &p) {
+        p.bandGainsDb[bandIndex] = gainDb;
+        bool anyBand = false;
+        for (double g : p.bandGainsDb) {
+            if (std::abs(g) > 0.001) { anyBand = true; break; }
+        }
+        p.eqActive = anyBand;
+    });
 }
 
 void AudiophileDsp::setBassBoostGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) { p.bassBoostGainDb = gainDb; });
+    mutateParams([&](DspParams &p) {
+        p.bassBoostGainDb = gainDb;
+        p.bassBoostActive = (std::abs(gainDb) > 0.001);
+    });
 }
 
 void AudiophileDsp::setTrebleGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) { p.trebleGainDb = gainDb; });
+    mutateParams([&](DspParams &p) {
+        p.trebleGainDb = gainDb;
+        p.trebleActive = (std::abs(gainDb) > 0.001);
+    });
 }
 
 void AudiophileDsp::setHarmonicExciterLevel(double level) {
-    mutateParams([&](DspParams &p) { p.harmonicExciterLevel = level; });
+    mutateParams([&](DspParams &p) {
+        p.harmonicExciterLevel = level;
+        p.harmonicExciterActive = (level > 0.001);
+    });
 }
 
 void AudiophileDsp::setClarityEnhancerGain(double gainDb) {
-    mutateParams([&](DspParams &p) { p.clarityEnhancerGainDb = gainDb; });
+    mutateParams([&](DspParams &p) {
+        p.clarityEnhancerGainDb = gainDb;
+        p.clarityActive = (std::abs(gainDb) > 0.001);
+    });
 }
 
 void AudiophileDsp::setStereoExpansionMultiplier(double multiplier) {
-    mutateParams([&](DspParams &p) { p.stereoExpansionMultiplier = multiplier; });
+    mutateParams([&](DspParams &p) {
+        p.stereoExpansionMultiplier = multiplier;
+        p.stereoExpansionActive = (std::abs(multiplier - 1.0) > 0.001);
+    });
 }
 
 void AudiophileDsp::setDvcVolume(double volume) {
@@ -101,7 +126,10 @@ void AudiophileDsp::setDvcVolume(double volume) {
 }
 
 void AudiophileDsp::setDitherStrength(double strength) {
-    mutateParams([&](DspParams &p) { p.ditherStrength = std::clamp(strength, 0.0, 4.0); });
+    mutateParams([&](DspParams &p) {
+        p.ditherStrength = strength;
+        p.ditherActive = (strength > 0.0001);
+    });
 }
 
 void AudiophileDsp::setOutputBitDepth(int bitDepth) {
@@ -109,23 +137,35 @@ void AudiophileDsp::setOutputBitDepth(int bitDepth) {
 }
 
 void AudiophileDsp::setWarmSaturationLevel(double level) {
-    mutateParams([&](DspParams &p) { p.warmSaturationLevel = level; });
+    mutateParams([&](DspParams &p) {
+        p.warmSaturationLevel = level;
+        p.saturationActive = (level > 0.001 || p.triodeWarmthLevel > 0.001 || p.pentodeTapeLevel > 0.001);
+    });
 }
 
 void AudiophileDsp::setTriodeWarmthLevel(double level) {
-    mutateParams([&](DspParams &p) { p.triodeWarmthLevel = level; });
+    mutateParams([&](DspParams &p) {
+        p.triodeWarmthLevel = level;
+        p.saturationActive = (level > 0.001 || p.warmSaturationLevel > 0.001 || p.pentodeTapeLevel > 0.001);
+    });
 }
 
 void AudiophileDsp::setPentodeTapeLevel(double level) {
-    mutateParams([&](DspParams &p) { p.pentodeTapeLevel = level; });
+    mutateParams([&](DspParams &p) {
+        p.pentodeTapeLevel = level;
+        p.saturationActive = (level > 0.001 || p.warmSaturationLevel > 0.001 || p.triodeWarmthLevel > 0.001);
+    });
 }
 
 void AudiophileDsp::setCrossfeedLevel(double level) {
-    mutateParams([&](DspParams &p) { p.crossfeedLevel = std::clamp(level, 0.0, 1.0); });
+    mutateParams([&](DspParams &p) {
+        p.crossfeedLevel = level;
+        p.crossfeedActive = (level > 0.001);
+    });
 }
 
 void AudiophileDsp::setLimiterEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.limiterEnabled = enabled; });
+    mutateParams([&](DspParams &p) { p.limiterActive = enabled; });
 }
 
 void AudiophileDsp::setLimiterThresholdDb(double thresholdDb) {
@@ -133,11 +173,14 @@ void AudiophileDsp::setLimiterThresholdDb(double thresholdDb) {
 }
 
 void AudiophileDsp::setSubBassMonoEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.subBassMonoEnabled = enabled; });
+    mutateParams([&](DspParams &p) { p.subBassMonoActive = enabled; });
 }
 
 void AudiophileDsp::setChannelBalance(double balance) {
-    mutateParams([&](DspParams &p) { p.channelBalance = std::clamp(balance, -1.0, 1.0); });
+    mutateParams([&](DspParams &p) {
+        p.channelBalance = std::clamp(balance, -1.0, 1.0);
+        p.balanceActive = (std::abs(p.channelBalance) > 0.001);
+    });
 }
 
 void AudiophileDsp::setInvertPhase(bool invert) {
@@ -149,11 +192,27 @@ void AudiophileDsp::setAirPresenceGainDb(double gainDb) {
 }
 
 void AudiophileDsp::setHrtfSpatialEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.hrtfSpatialEnabled = enabled; });
+    mutateParams([&](DspParams &p) { p.spatialActive = enabled; });
 }
 
 void AudiophileDsp::setHrtfRoomSize(double roomSize) {
     mutateParams([&](DspParams &p) { p.hrtfRoomSize = std::clamp(roomSize, 0.0, 1.0); });
+}
+
+void AudiophileDsp::setDspParametersBatch(const DspParams &newParams) {
+    bitPerfectBypassFlag_.store(newParams.bitPerfectBypass, std::memory_order_release);
+    mutateParams([&](DspParams &p) {
+        p = newParams;
+    });
+    Command cmd;
+    cmd.kind = Command::Kind::kSyncCoefficients;
+    enqueueCommand(cmd);
+}
+
+DspParams AudiophileDsp::getDspParams() {
+    DspParams snap;
+    readParams(snap);
+    return snap;
 }
 
 void AudiophileDsp::setSampleRate(double sampleRate) {
@@ -423,13 +482,13 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     const double clarityGain = p.clarityEnhancerGainDb;
     const double stereoExp = p.stereoExpansionMultiplier;
     const double crossfeed = p.crossfeedLevel;
-    const bool subMono = p.subBassMonoEnabled;
+    const bool subMono = p.subBassMonoActive;
     const double balance = p.channelBalance;
     const bool invPhase = p.invertPhase;
     const double airGain = p.airPresenceGainDb;
-    const bool hrtfOn = p.hrtfSpatialEnabled;
+    const bool hrtfOn = p.spatialActive;
     const double roomSize = p.hrtfRoomSize;
-    const bool limiterOn = p.limiterEnabled;
+    const bool limiterOn = p.limiterActive;
     const double limThresh = std::pow(10.0, p.limiterThresholdDb / 20.0);
     const double dvc = p.dvcVolume;
 
@@ -688,7 +747,7 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     if (channelCount > 1 && sumL2 > 1e-12 && sumR2 > 1e-12) {
         const float corr = static_cast<float>(sumLR / (std::sqrt(sumL2 * sumR2) + 1e-12));
         phaseCorrelation_.store(phaseCorrelation_.load(std::memory_order_relaxed) * 0.95f +
-                                std::clamp(corr, -1.0, 1.0) * 0.05f,
+                                std::clamp(corr, -1.0f, 1.0f) * 0.05f,
                                 std::memory_order_relaxed);
     }
 }

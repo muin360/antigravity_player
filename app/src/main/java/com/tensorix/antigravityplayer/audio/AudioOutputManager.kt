@@ -171,25 +171,20 @@ class AudioOutputManager(
     /**
      * Real per-format probing for Direct Playback capability (API 26-34+).
      */
+    /**
+     * Real per-format probing for Direct Playback capability (API 29-35+).
+     * Rule 26: Direct SDK calls, zero reflection.
+     */
     fun checkDirectPlaybackSupport(context: Context, audioAttributes: AudioAttributes, audioFormat: AudioFormat): Boolean {
-        return if (Build.VERSION.SDK_INT >= 33) {
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            try {
-                val method = audioManager.javaClass.getMethod("getDirectPlaybackSupport", AudioFormat::class.java, AudioAttributes::class.java)
-                val support = method.invoke(audioManager, audioFormat, audioAttributes) as? Int ?: 0
-                support != 0 // 0 is DIRECT_PLAYBACK_NOT_SUPPORTED
-            } catch (e: Exception) {
-                false
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                val support = AudioManager.getDirectPlaybackSupport(audioFormat, audioAttributes)
+                support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED
             }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                val method = AudioTrack::class.java.getMethod("isDirectOutputSupported", AudioFormat::class.java, AudioAttributes::class.java)
-                method.invoke(null, audioFormat, audioAttributes) as? Boolean ?: false
-            } catch (e: Exception) {
-                false
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                AudioTrack.isDirectPlaybackSupported(audioFormat, audioAttributes)
             }
-        } else {
-            false
+            else -> false
         }
     }
 

@@ -37,9 +37,28 @@ struct DspParams {
     bool enabled = true;
     bool bitPerfectBypass = false;
 
-    // Neutral-by-default signal chain (Phase 15.4): with no user adjustments
-    // the DSP is bit-transparent apart from DC blocking and the final safety
-    // clamp. Colouration stages are strictly opt-in.
+    // Independent feature active flags (Rule 8)
+    bool eqActive = false;
+    bool autoEqActive = false;
+    bool peqActive = false;
+    bool limiterActive = false;
+    bool ditherActive = false;
+    bool replayGainActive = false;
+    bool crossfeedActive = false;
+    bool balanceActive = false;
+    bool spatialActive = false;
+    bool bassBoostActive = false;
+    bool trebleActive = false;
+    bool clarityActive = false;
+    bool harmonicExciterActive = false;
+    bool saturationActive = false;
+    bool stereoExpansionActive = false;
+    bool subBassMonoActive = false;
+    bool channelTransformActive = false;
+    bool preampActive = false;
+
+    // Neutral-by-default signal chain: with no user adjustments
+    // the DSP is bit-transparent apart from the final safety clamp.
     double preAmpGainDb = 0.0;
     double bassBoostGainDb = 0.0;
     double trebleGainDb = 0.0;
@@ -47,19 +66,17 @@ struct DspParams {
     double clarityEnhancerGainDb = 0.0;
     double stereoExpansionMultiplier = 1.0;
     double dvcVolume = 1.0;
+    double replayGainMultiplier = 1.0;
     double ditherStrength = 0.0;
     int32_t outputBitDepth = 24;
     double warmSaturationLevel = 0.0;
     double triodeWarmthLevel = 0.0;
     double pentodeTapeLevel = 0.0;
     double crossfeedLevel = 0.0;
-    bool limiterEnabled = false;          // safety ceiling stays via hard clamp
     double limiterThresholdDb = 0.0;
-    bool subBassMonoEnabled = false;
     double channelBalance = 0.0;
     bool invertPhase = false;
     double airPresenceGainDb = 0.0;
-    bool hrtfSpatialEnabled = false;
     double hrtfRoomSize = 0.5;
     double bandGainsDb[10] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 };
@@ -97,6 +114,10 @@ public:
     void setAirPresenceGainDb(double gainDb);
     void setHrtfSpatialEnabled(bool enabled);
     void setHrtfRoomSize(double roomSize);
+
+    // Batch parameter mutator (atomic update for all parameters in one seqlock cycle)
+    void setDspParametersBatch(const DspParams &newParams);
+    DspParams getDspParams();
 
     // Parametric EQ (PEQ)
     void clearPeqBands();

@@ -68,6 +68,17 @@ object OboeBridge {
     external fun setHrtfSpatialEnabled(handle: Long, enabled: Boolean)
     external fun setHrtfRoomSize(handle: Long, roomSize: Double)
 
+    // Batch DSP Parameter Mutator (Rule 8)
+    external fun setDspParametersBatch(
+        handle: Long,
+        enabled: Boolean,
+        bitPerfectBypass: Boolean,
+        activeFlags: BooleanArray,
+        params: DoubleArray,
+        outputBitDepth: Int,
+        invertPhase: Boolean
+    )
+
     // DSD Engine
     external fun setDsdMode(handle: Long, mode: Int, dsdRate: Int)
 
@@ -89,6 +100,27 @@ object OboeBridge {
      */
     external fun getStreamFrameTelemetry(handle: Long): LongArray?
 
+    // Structured IDs (Rule 11)
+    object AudioApiId {
+        const val UNSPECIFIED = 0
+        const val OPENSLES = 1
+        const val AAUDIO = 2
+    }
+
+    object SharingModeId {
+        const val SHARED = 0
+        const val EXCLUSIVE = 1
+    }
+
+    object AudioFormatId {
+        const val INVALID = -1
+        const val UNSPECIFIED = 0
+        const val I16 = 1
+        const val FLOAT = 2
+        const val I24 = 3
+        const val I32 = 4
+    }
+
     data class NativeStreamInfo(
         val api: String,
         val sharingMode: String,
@@ -101,8 +133,37 @@ object OboeBridge {
         val state: String = "Open",
         val isStarted: Boolean = true,
         val framesWritten: Long = 0L,
-        val underrunCount: Int = 0
-    )
+        val underrunCount: Int = 0,
+        // Structured typed fields (Rule 11)
+        val apiId: Int = AudioApiId.UNSPECIFIED,
+        val sharingModeId: Int = SharingModeId.SHARED,
+        val performanceModeId: Int = 0,
+        val formatId: Int = AudioFormatId.UNSPECIFIED,
+        val bitDepth: Int = 0,
+        val channelMask: Int = 0,
+        val stateId: Int = 0,
+        val streamGeneration: Long = 0L
+    ) {
+        constructor(
+            api: String,
+            sharingMode: String,
+            performanceMode: String,
+            sampleRate: Int,
+            channelCount: Int,
+            format: String,
+            bufferSize: Int,
+            deviceId: Int,
+            state: String,
+            isStarted: Boolean,
+            framesWritten: Long,
+            underrunCount: Int
+        ) : this(
+            api, sharingMode, performanceMode, sampleRate, channelCount, format,
+            bufferSize, deviceId, state, isStarted, framesWritten, underrunCount,
+            AudioApiId.UNSPECIFIED, SharingModeId.SHARED, 0, AudioFormatId.UNSPECIFIED,
+            0, 0, 0, 0L
+        )
+    }
 
     external fun getNativeStreamInfo(handle: Long): NativeStreamInfo?
 }

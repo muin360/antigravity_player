@@ -169,30 +169,34 @@ object BitPerfectVerifier {
             failureReasons.add("DSP Engine is active")
         }
 
-        // 18. EQ is disabled
-        val eqDisabled = dspBypassed
+        // 18. EQ is disabled (Rule 8: independent explicit verification)
+        val eqDisabled = dspProcessor == null || !dspProcessor.isEqActive
         evidence.add(BitPerfectEvidence("EQ Disabled", eqDisabled, EvidenceSource.OBOE_STREAM))
         if (!eqDisabled) {
             failureReasons.add("Equalizer filters are active")
         }
 
-        // 19. AutoEQ is disabled or bypassed
-        val autoEqDisabled = dspBypassed
-        evidence.add(BitPerfectEvidence("AutoEQ Disabled", autoEqDisabled, EvidenceSource.OBOE_STREAM))
+        // 19. Tone controls (bass/treble/clarity/presence) disabled
+        val toneDisabled = dspProcessor == null ||
+            (!dspProcessor.isBassBoostActive && !dspProcessor.isTrebleActive && !dspProcessor.isClarityActive && !dspProcessor.isAirPresenceActive)
+        evidence.add(BitPerfectEvidence("Tone Controls Disabled", toneDisabled, EvidenceSource.OBOE_STREAM))
+        if (!toneDisabled) {
+            failureReasons.add("Hardware tone shaping or clarity filters are active")
+        }
 
-        // 20. PEQ is disabled
-        val peqDisabled = dspBypassed
+        // 20. PEQ / AutoEQ is disabled
+        val peqDisabled = dspProcessor == null || !dspProcessor.isEqActive
         evidence.add(BitPerfectEvidence("PEQ Disabled", peqDisabled, EvidenceSource.OBOE_STREAM))
 
         // 21. Limiter is disabled
-        val limiterDisabled = dspProcessor == null || !dspProcessor.limiterEnabled
+        val limiterDisabled = dspProcessor == null || (!dspProcessor.limiterEnabled && !dspProcessor.isLimiterActive)
         evidence.add(BitPerfectEvidence("Limiter Disabled", limiterDisabled, EvidenceSource.OBOE_STREAM))
         if (!limiterDisabled) {
             failureReasons.add("True-peak limiter is active")
         }
 
         // 22. Dither is disabled
-        val ditherDisabled = dspProcessor == null || dspProcessor.ditherStrength < 0.0001
+        val ditherDisabled = dspProcessor == null || (dspProcessor.ditherStrength < 0.0001 && !dspProcessor.isDitherActive)
         evidence.add(BitPerfectEvidence("Dither Disabled", ditherDisabled, EvidenceSource.OBOE_STREAM))
         if (!ditherDisabled) {
             failureReasons.add("TPDF dither modification is active")
@@ -219,9 +223,12 @@ object BitPerfectVerifier {
             failureReasons.add("ReplayGain modification is active")
         }
 
-        // 26. Normalization is disabled
-        val normDisabled = dspBypassed
-        evidence.add(BitPerfectEvidence("Normalization Disabled", normDisabled, EvidenceSource.OBOE_STREAM))
+        // 26. Saturation / Analog warmth is disabled
+        val saturationDisabled = dspProcessor == null || (dspProcessor.warmSaturationLevel <= 0.001 && dspProcessor.triodeWarmthLevel <= 0.001 && dspProcessor.pentodeTapeLevel <= 0.001 && !dspProcessor.isSaturationActive)
+        evidence.add(BitPerfectEvidence("Saturation Disabled", saturationDisabled, EvidenceSource.OBOE_STREAM))
+        if (!saturationDisabled) {
+            failureReasons.add("Tube/Tape saturation simulation is active")
+        }
 
         // 27. Spatial / HRTF processing is disabled
         val spatialOff = !isHrtfEnabled
@@ -231,26 +238,48 @@ object BitPerfectVerifier {
         }
 
         // 28. Crossfeed is disabled
-        val crossfeedOff = dspProcessor == null || dspProcessor.crossfeedLevel < 0.001
+        val crossfeedOff = dspProcessor == null || (dspProcessor.crossfeedLevel < 0.001 && !dspProcessor.isCrossfeedActive)
         evidence.add(BitPerfectEvidence("Crossfeed Disabled", crossfeedOff, EvidenceSource.OBOE_STREAM))
         if (!crossfeedOff) {
             failureReasons.add("Meier crossfeed is active")
         }
 
         // 29. Channel balance is unity (0.0)
-        val balanceUnity = dspProcessor == null || (dspProcessor.channelBalance >= -0.01 && dspProcessor.channelBalance <= 0.01)
+        val balanceUnity = dspProcessor == null || (dspProcessor.channelBalance >= -0.01 && dspProcessor.channelBalance <= 0.01 && !dspProcessor.isChannelBalanceActive)
         evidence.add(BitPerfectEvidence("Balance Unity", balanceUnity, EvidenceSource.OBOE_STREAM))
         if (!balanceUnity) {
             failureReasons.add("Channel balance attenuation is active")
         }
 
-        // 30. No channel transformation active
-        val noChannelTransform = true
+        // 30. No channel transformation active (Rule 9: verified from actual evidence)
+        val channelCountsMatch = snapshot.source.channels.value > 0 &&
+            snapshot.actualOutput.channels.value > 0 &&
+            snapshot.source.channels.value == snapshot.actualOutput.channels.value
+        val stereoExpansionOff = dspProcessor == null || !dspProcessor.isStereoExpansionActive
+        val subBassMonoOff = dspProcessor == null || !dspProcessor.isSubBassMonoActive
+        val invertPhaseOff = dspProcessor == null || !dspProcessor.isInvertPhaseActive
+        val noChannelRemap = snapshot.pipeline?.channelRemapActive != true
+        val noChannelTransform = channelCountsMatch && balanceUnity && stereoExpansionOff && subBassMonoOff && invertPhaseOff && noChannelRemap
         evidence.add(BitPerfectEvidence("No Channel Transform", noChannelTransform, EvidenceSource.OBOE_STREAM))
+        if (!noChannelTransform) {
+            failureReasons.add("Channel transformation, downmixing, or spatial remapping is active")
+        }
 
-        // 31. No lossy PCM conversion
-        val noLossyPcm = true
+        // 31. No lossy PCM conversion (Rule 9: verified from actual evidence)
+        val sourceBits = snapshot.source.bitDepth.value
+        val outputBits = snapshot.actualOutput.bitDepth.value
+        val bitDepthPreserved = when {
+            sourceBits > 0 && outputBits > 0 -> {
+                // If output depth >= source depth, or output is 32-bit Float, precision is preserved
+                outputBits >= sourceBits || snapshot.actualOutput.encoding.value.contains("Float", ignoreCase = true)
+            }
+            else -> false // Unknown output format cannot claim bit-perfect preservation
+        }
+        val noLossyPcm = encodingCompatible && bitDepthPreserved
         evidence.add(BitPerfectEvidence("No Lossy PCM", noLossyPcm, EvidenceSource.OBOE_STREAM))
+        if (!noLossyPcm) {
+            failureReasons.add("PCM bit-depth truncation or lossy downconversion detected (Source: ${sourceBits}-bit, Output: ${outputBits}-bit)")
+        }
 
         // 32. Direct HAL path is ACTUALLY active (runtime proof)
         val directActive = snapshot.directPathActive.value && 

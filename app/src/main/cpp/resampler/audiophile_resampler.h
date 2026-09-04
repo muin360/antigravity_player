@@ -16,14 +16,21 @@ enum class ResampleQuality {
 
 class AudiophileResampler {
 public:
+    static constexpr int32_t MAX_INPUT_FRAMES = 8192;
+    static constexpr int32_t MAX_HISTORY_FRAMES = 128;
+    // Support upsampling up to 384 kHz (8.7x). Sized for up to 8 channels.
+    static constexpr int32_t MAX_OUTPUT_FRAMES = 73728;
+
     // Explicit data-plane contract for one process() call.
-    //   outputFrames       : frames written into outBuffer
-    //   inputFramesConsumed: input frames actually consumed from inData.
-    // The caller MUST advance its input cursor by exactly inputFramesConsumed
-    // and must NOT write any unresampled fallback data when outputFrames == 0.
+    //   outputFrames       : frames produced and available at outputData
+    //   inputFramesConsumed: input frames actually consumed from inData
+    //   outputData         : pointer to contiguous interleaved float samples
+    //                        (in pass-through mode, points directly to inData;
+    //                         in resample mode, points to internal preallocated buffer)
     struct Result {
         int32_t outputFrames = 0;
         int32_t inputFramesConsumed = 0;
+        const float *outputData = nullptr;
     };
 
     AudiophileResampler();
@@ -35,11 +42,8 @@ public:
     void configure(int32_t inSampleRate, int32_t outSampleRate, int32_t channelCount,
                    ResampleQuality quality = ResampleQuality::SINC_FAST);
 
-    // Render-thread call. Returns produced output frames and the exact number
-    // of input frames consumed. All input passed in a successful call is
-    // consumed (buffered internally when upsampling), so callers may treat
-    // consumption as total while draining produced output asynchronously.
-    Result process(const float *inData, int32_t inFrames, std::vector<float> &outBuffer);
+    // Render-thread call. Truly allocation-free: uses preallocated workspaces.
+    Result process(const float *inData, int32_t inFrames);
 
     // Safe to call from any thread: defers the actual state clear to the
     // render thread so it can never race an in-flight process() call.
@@ -62,7 +66,6 @@ private:
     };
 
     static constexpr int32_t NUM_PHASES = 64;
-    static constexpr int32_t MAX_HISTORY_FRAMES = 128;
 
     static std::shared_ptr<const Config> buildConfig(
         int32_t inSampleRate, int32_t outSampleRate, int32_t channelCount,
@@ -78,15 +81,17 @@ private:
     int32_t pendingInRate_ = 48000;
     int32_t pendingOutRate_ = 48000;
 
-    // Render-thread-owned streaming state.
+    // Render-thread-owned streaming state (preallocated, never resized on audio thread).
     std::shared_ptr<const Config> active_;
     uint64_t activeGeneration_ = 0;
     double timePos_ = 0.0;
     std::vector<float> historyBuffer_;
     std::vector<float> workBuffer_;
+    std::vector<float> outputBuffer_;
 
     // Deferred reset request (control thread sets, render thread executes).
     std::atomic<bool> resetRequested_{false};
 };
 
 } // namespace antigravity
+

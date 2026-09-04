@@ -97,33 +97,25 @@ object HardwareHiFiVerifier {
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .build()
                 
-                // Use reflection for getDirectPlaybackSupport to ensure it works on all build environments
-                try {
-                    val method = audioManager.javaClass.getMethod("getDirectPlaybackSupport", AudioFormat::class.java, AudioAttributes::class.java)
-                    val result = method.invoke(audioManager, format, attr) as? Int ?: 0
-                    result != 0 // 0 is DIRECT_PLAYBACK_NOT_SUPPORTED
-                } catch (e: Exception) {
-                    false
-                }
+                // Rule 26: Direct Android SDK call without reflection
+                val support = AudioManager.getDirectPlaybackSupport(format, attr)
+                support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED
             }
-            // Android 10â€“12 (API 29â€“32): AudioTrack method
+            // Android 10–12 (API 29–32): AudioTrack direct API
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                runCatching {
-                    val format = AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(44100)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                    val attr = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .build()
-                    
-                    // Reflection for isDirectOutputSupported
-                    val method = AudioTrack::class.java.getMethod("isDirectOutputSupported", AudioFormat::class.java, AudioAttributes::class.java)
-                    method.invoke(null, format, attr) as? Boolean ?: false
-                }.getOrDefault(false)
+                val format = AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(44100)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .build()
+                val attr = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .build()
+                
+                // Rule 26: Direct Android SDK call without reflection
+                AudioTrack.isDirectPlaybackSupported(format, attr)
             }
-            // Android 8.0â€“9 (API 26â€“28): reflection + HAL parameters
+            // Android 8.0–9 (API 26–28): HAL parameters
             else -> {
                 runCatching {
                     val params = audioManager.getParameters("direct_pcm")
@@ -303,11 +295,10 @@ object HardwareHiFiVerifier {
                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                 .build()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && audioManager != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 try {
-                    val method = audioManager.javaClass.getMethod("getDirectPlaybackSupport", AudioFormat::class.java, AudioAttributes::class.java)
-                    val support = method.invoke(audioManager, format, attributes) as? Int ?: 0
-                    if (support != 0) { // 0 is DIRECT_PLAYBACK_NOT_SUPPORTED
+                    val support = AudioManager.getDirectPlaybackSupport(format, attributes)
+                    if (support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED) {
                         details.add("Direct Playback confirmed via Method A (Encoding=$encoding, $targetRate Hz)")
                         return true
                     }
@@ -317,10 +308,9 @@ object HardwareHiFiVerifier {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    val method = AudioTrack::class.java.getMethod("isDirectOutputSupported", AudioFormat::class.java, AudioAttributes::class.java)
-                    val isSupported = method.invoke(null, format, attributes) as? Boolean ?: false
+                    val isSupported = AudioTrack.isDirectPlaybackSupported(format, attributes)
                     if (isSupported) {
-                        details.add("Direct Output confirmed via Method B (AudioTrack.isDirectOutputSupported)")
+                        details.add("Direct Output confirmed via Method B (AudioTrack.isDirectPlaybackSupported)")
                         return true
                     }
                 } catch (_: Exception) {
@@ -343,9 +333,7 @@ object HardwareHiFiVerifier {
             Log.w("AntigravityAudioAudit", "[PROBE] Method C error: ${e.message}")
         }
 
-        // Hidden-API AudioSystem reflection removed (Lint PrivateApi).
-        // Public-API probes only: getDirectPlaybackSupport (API 33+) or
-        // AudioTrack.isDirectOutputSupported (API 29-32); below 29 -> UNKNOWN.
+        // Direct public SDK API probes (Rule 26: zero reflection)
         val fmt = android.media.AudioFormat.Builder()
             .setSampleRate(targetRate)
             .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
@@ -357,21 +345,10 @@ object HardwareHiFiVerifier {
             .build()
 
         val supported = runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
-                val m = am?.javaClass?.getMethod(
-                    "getDirectPlaybackSupport",
-                    android.media.AudioFormat::class.java,
-                    android.media.AudioAttributes::class.java
-                )
-                ((m?.invoke(am, fmt, attr) as? Int) ?: 0) != 0
-            } else if (android.os.Build.VERSION.SDK_INT >= 29) {
-                val m = android.media.AudioTrack::class.java.getMethod(
-                    "isDirectOutputSupported",
-                    android.media.AudioFormat::class.java,
-                    android.media.AudioAttributes::class.java
-                )
-                m.invoke(null, fmt, attr) as? Boolean ?: false
+            if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                AudioManager.getDirectPlaybackSupport(fmt, attr) != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED
+            } else if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                android.media.AudioTrack.isDirectPlaybackSupported(fmt, attr)
             } else false
         }.getOrDefault(false)
 

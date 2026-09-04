@@ -385,7 +385,8 @@ class OboeAudioSink(
         }
     }
 
-    private var directByteBuffer: ByteBuffer = ByteBuffer.allocateDirect(65536).order(ByteOrder.LITTLE_ENDIAN)
+    // Preallocated 256 KB direct scratch (Rule 3: zero allocation in audio write path)
+    private val directByteBuffer: ByteBuffer = ByteBuffer.allocateDirect(262144).order(ByteOrder.LITTLE_ENDIAN)
 
     @WorkerThread
     override fun handleBuffer(
@@ -478,13 +479,12 @@ class OboeAudioSink(
                 isBitPerfect = bitPerfectMode
             )
         } else {
-            if (directByteBuffer.capacity() < usableBytes) {
-                directByteBuffer = ByteBuffer.allocateDirect(usableBytes * 2).order(ByteOrder.LITTLE_ENDIAN)
-            }
+            val chunkBytes = usableBytes.coerceAtMost(directByteBuffer.capacity())
+            val chunkFrames = chunkBytes / bytesPerFrame
             directByteBuffer.clear()
             val slice = buffer.duplicate()
             slice.position(initialPosition)
-            slice.limit(initialPosition + usableBytes)
+            slice.limit(initialPosition + chunkBytes)
             directByteBuffer.put(slice)
             directByteBuffer.flip()
 
@@ -493,8 +493,8 @@ class OboeAudioSink(
                 generation = generationSnapshot,
                 directBuffer = directByteBuffer,
                 offsetBytes = 0,
-                numBytes = usableBytes,
-                numFrames = numFrames,
+                numBytes = chunkBytes,
+                numFrames = chunkFrames,
                 pcmEncoding = pcmEncoding,
                 isBitPerfect = bitPerfectMode
             )
@@ -799,36 +799,62 @@ class OboeAudioSink(
         val dsp = dspProcessor ?: return
         try {
             val isBypass = bitPerfectMode || dsp.isBitPerfectBypass
-            OboeBridge.setDspEnabled(handle, !isBypass && dsp.isEnabled)
-            OboeBridge.setBitPerfectBypass(handle, isBypass)
-            OboeBridge.setPreAmpGainDb(handle, if (isBypass) 0.0 else dsp.preAmpGainDb)
-            OboeBridge.setBassBoostGainDb(handle, if (isBypass) 0.0 else dsp.bassBoostGainDb)
-            OboeBridge.setTrebleGainDb(handle, if (isBypass) 0.0 else dsp.trebleGainDb)
-            OboeBridge.setHarmonicExciterLevel(handle, if (isBypass) 0.0 else dsp.harmonicExciterLevel)
-            OboeBridge.setClarityEnhancerGain(handle, if (isBypass) 0.0 else dsp.clarityEnhancerGain)
-            OboeBridge.setStereoExpansionMultiplier(handle, if (isBypass) 1.0 else dsp.stereoExpansionMultiplier)
-            OboeBridge.setDvcVolume(handle, if (isBypass) 1.0 else dsp.dvcVolume)
-            OboeBridge.setDitherStrength(handle, if (isBypass) 0.0 else dsp.ditherStrength)
-            OboeBridge.setOutputBitDepth(handle, dsp.outputBitDepth)
-            OboeBridge.setWarmSaturationLevel(handle, if (isBypass) 0.0 else dsp.warmSaturationLevel)
-            OboeBridge.setTriodeWarmthLevel(handle, if (isBypass) 0.0 else dsp.triodeWarmthLevel)
-            OboeBridge.setPentodeTapeLevel(handle, if (isBypass) 0.0 else dsp.pentodeTapeLevel)
-            OboeBridge.setCrossfeedLevel(handle, if (isBypass) 0.0 else dsp.crossfeedLevel)
-            OboeBridge.setLimiterEnabled(handle, !isBypass && dsp.limiterEnabled)
-            OboeBridge.setLimiterThresholdDb(handle, dsp.limiterThresholdDb)
-            OboeBridge.setSubBassMonoEnabled(handle, !isBypass && dsp.subBassMonoEnabled)
-            OboeBridge.setChannelBalance(handle, if (isBypass) 0.0 else dsp.channelBalance)
-            OboeBridge.setInvertPhase(handle, !isBypass && dsp.invertPhase)
-            OboeBridge.setAirPresenceGainDb(handle, if (isBypass) 0.0 else dsp.airPresenceGainDb)
-
-            // Sync 10-band Graphic EQ & HRTF Spatial Audio from EqualizerEngine
-            PlaybackService.instance?.equalizerEngine?.let { eq ->
-                eq.bandLevels.value.forEachIndexed { index, level ->
-                    OboeBridge.setBandGain(handle, index, if (isBypass) 0.0 else level.toDouble() / 100.0)
-                }
-                OboeBridge.setHrtfSpatialEnabled(handle, !isBypass && eq.hrtfSpatialEnabled.value)
-                OboeBridge.setHrtfRoomSize(handle, if (isBypass) 0.0 else eq.hrtfRoomSize.value.toDouble())
+            val eq = PlaybackService.instance?.equalizerEngine
+            val eqBands = DoubleArray(10) { idx ->
+                if (isBypass) 0.0 else (eq?.bandLevels?.value?.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
             }
+
+            val flags = booleanArrayOf(
+                !isBypass && dsp.isEqActive,
+                !isBypass && (PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true),
+                !isBypass && dsp.isEqActive,
+                !isBypass && dsp.isLimiterActive,
+                !isBypass && dsp.isDitherActive,
+                !isBypass && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001),
+                !isBypass && dsp.isCrossfeedActive,
+                !isBypass && dsp.isChannelBalanceActive,
+                !isBypass && (eq?.hrtfSpatialEnabled?.value == true),
+                !isBypass && dsp.isBassBoostActive,
+                !isBypass && dsp.isTrebleActive,
+                !isBypass && dsp.isClarityActive,
+                !isBypass && dsp.isHarmonicActive,
+                !isBypass && dsp.isSaturationActive,
+                !isBypass && dsp.isStereoExpansionActive,
+                !isBypass && dsp.isSubBassMonoActive,
+                false
+            )
+
+            val doubleParams = DoubleArray(27)
+            doubleParams[0] = if (isBypass) 0.0 else dsp.preAmpGainDb
+            doubleParams[1] = if (isBypass) 0.0 else dsp.bassBoostGainDb
+            doubleParams[2] = if (isBypass) 0.0 else dsp.trebleGainDb
+            doubleParams[3] = if (isBypass) 0.0 else dsp.harmonicExciterLevel
+            doubleParams[4] = if (isBypass) 0.0 else dsp.clarityEnhancerGain
+            doubleParams[5] = if (isBypass) 1.0 else dsp.stereoExpansionMultiplier
+            doubleParams[6] = if (isBypass) 1.0 else dsp.dvcVolume
+            doubleParams[7] = if (isBypass) 1.0 else dsp.replayGainMultiplier
+            doubleParams[8] = if (isBypass) 0.0 else dsp.ditherStrength
+            doubleParams[9] = if (isBypass) 0.0 else dsp.warmSaturationLevel
+            doubleParams[10] = if (isBypass) 0.0 else dsp.triodeWarmthLevel
+            doubleParams[11] = if (isBypass) 0.0 else dsp.pentodeTapeLevel
+            doubleParams[12] = if (isBypass) 0.0 else dsp.crossfeedLevel
+            doubleParams[13] = if (isBypass) 0.0 else dsp.limiterThresholdDb
+            doubleParams[14] = if (isBypass) 0.0 else dsp.channelBalance
+            doubleParams[15] = if (isBypass) 0.0 else dsp.airPresenceGainDb
+            doubleParams[16] = if (isBypass) 0.5 else (eq?.hrtfRoomSize?.value?.toDouble() ?: 0.5)
+            for (i in 0 until 10) {
+                doubleParams[17 + i] = eqBands[i]
+            }
+
+            OboeBridge.setDspParametersBatch(
+                handle = handle,
+                enabled = !isBypass && dsp.isEnabled,
+                bitPerfectBypass = isBypass,
+                activeFlags = flags,
+                params = doubleParams,
+                outputBitDepth = dsp.outputBitDepth,
+                invertPhase = !isBypass && dsp.invertPhase
+            )
 
             // Sync Active AutoEQ PEQ Bands if enabled
             PlaybackService.instance?.autoEqEngine?.let { autoEq ->

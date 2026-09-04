@@ -67,12 +67,13 @@ object AudioVerificationEngine {
             encoding = AudioEvidence("PCM", EvidenceSource.AUDIO_TRACK, Confidence.VERIFIED)
         )
 
-        // 5. Actual Output Telemetry
+        // 5. Actual Output Telemetry (Rule 11: structured format, no string matching)
         val actual = if (nativeInfo != null) {
             val bitDepth = when {
-                nativeInfo.format.contains("24") -> 24
-                nativeInfo.format.contains("Float", ignoreCase = true) || nativeInfo.format.contains("32") -> 32
-                nativeInfo.format.contains("16") -> 16
+                nativeInfo.bitDepth > 0 -> nativeInfo.bitDepth
+                nativeInfo.formatId == OboeBridge.AudioFormatId.I16 -> 16
+                nativeInfo.formatId == OboeBridge.AudioFormatId.I24 -> 24
+                nativeInfo.formatId == OboeBridge.AudioFormatId.FLOAT || nativeInfo.formatId == OboeBridge.AudioFormatId.I32 -> 32
                 else -> 0
             }
             AudioFormatSnapshot(
@@ -105,14 +106,16 @@ object AudioVerificationEngine {
         }
 
         val apiEvidence = AudioEvidence(
-            if (nativeInfo != null) AudioOutputApi.AAUDIO else AudioOutputApi.AUDIOTRACK,
+            if (nativeInfo != null) {
+                if (nativeInfo.apiId == OboeBridge.AudioApiId.OPENSLES) AudioOutputApi.OPENSL_ES else AudioOutputApi.AAUDIO
+            } else AudioOutputApi.AUDIOTRACK,
             if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.AUDIO_TRACK,
             if (nativeInfo != null) Confidence.VERIFIED else Confidence.HIGH_CONFIDENCE
         )
 
         // 7. Direct & Mixer Path State
         val isDirectActive = when {
-            nativeInfo != null -> nativeInfo.sharingMode == "EXCLUSIVE"
+            nativeInfo != null -> nativeInfo.sharingModeId == OboeBridge.SharingModeId.EXCLUSIVE || nativeInfo.sharingMode == "EXCLUSIVE"
             hardwareReport.isDirectOutputActive -> true
             else -> false
         }
@@ -171,7 +174,13 @@ object AudioVerificationEngine {
                 framesWritten = it.framesWritten,
                 underrunCount = it.underrunCount,
                 bufferSizeInFrames = it.bufferSize,
-                confidence = Confidence.VERIFIED
+                confidence = Confidence.VERIFIED,
+                bitDepth = it.bitDepth,
+                channelMask = it.channelMask,
+                streamGeneration = it.streamGeneration,
+                apiId = it.apiId,
+                sharingModeId = it.sharingModeId,
+                formatId = it.formatId
             )
         }
 

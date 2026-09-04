@@ -103,11 +103,12 @@ public:
     static constexpr size_t kWriteScratchFrames = 4096;
     static constexpr size_t kRingMask = kRingCapacitySamples - 1;
 
+    static constexpr size_t kMaxScratchSamples = 65536; // 32768 frames stereo (128 KB floats)
+
     std::vector<float> ring_;                 // preallocated at open, never resized
     std::vector<float> writeScratch_;         // preallocated at open, never resized
-    std::vector<float> resampleWork_;         // render-thread-only scratch (may grow)
 
-    // Absolute monotonic sample counters (render thread is the sole mutator;
+    // Monotonic sample counters (render thread is the sole mutator;
     // atomics so control threads can read telemetry safely).
     std::atomic<uint64_t> ringHead_{0};
     std::atomic<uint64_t> ringTail_{0};
@@ -130,6 +131,7 @@ public:
     // Render thread only: append interleaved samples to the ring.
     // Returns false when the ring would overflow (device stalled).
     bool appendToRing(const float *samples, size_t count) {
+        if (!samples || count == 0) return true;
         if (stagedSamples() + count > kRingCapacitySamples) return false;
         uint64_t h = ringHead_.load(std::memory_order_relaxed);
         for (size_t i = 0; i < count; ++i) {
@@ -196,7 +198,7 @@ public:
     std::atomic<int64_t> lastQueryFramePos{0};
 
     explicit OboeStreamWrapper(uint64_t gen) : generationId(gen) {
-        pcmFloatScratchBuffer.reserve(16384);
+        pcmFloatScratchBuffer.assign(kMaxScratchSamples, 0.0f);
     }
 
     ~OboeStreamWrapper() override {
@@ -429,16 +431,29 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     JNIEnv *env, jobject thiz, jint sampleRate, jint channelCount,
     jboolean bitPerfectMode, jint deviceId) {
 
+    // Rule 4: Step 1 - Validate input format
     if (sampleRate <= 0 || channelCount <= 0 || channelCount > 8) {
         return 0;
     }
 
+    // Rule 4: Step 2 - Calculate maximum required memory & preallocate buffers
     const uint64_t gen = gGenerationSequence.fetch_add(1, std::memory_order_relaxed);
     auto wrapper = std::make_shared<OboeStreamWrapper>(gen);
     wrapper->configuredSampleRate = sampleRate;
     wrapper->configuredChannelCount = channelCount;
-    wrapper->dsp.setSampleRate(static_cast<double>(sampleRate));
 
+    // Fixed data-path buffers allocated ONCE before stream creation/start
+    wrapper->ring_.assign(OboeStreamWrapper::kRingCapacitySamples, 0.0f);
+    wrapper->writeScratch_.assign(
+        OboeStreamWrapper::kWriteScratchFrames * static_cast<size_t>(std::max(1, channelCount)),
+        0.0f);
+
+    // Rule 4: Step 3 - Configure DSP & resampler initially
+    wrapper->dsp.setSampleRate(static_cast<double>(sampleRate));
+    wrapper->resampler.configure(sampleRate, sampleRate,
+                                 channelCount, antigravity::ResampleQuality::SINC_FAST);
+
+    // Rule 4: Step 4 - Create Oboe stream
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output)
            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
@@ -454,8 +469,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
         builder.setDeviceId(deviceId);
     }
 
-    // shared_ptr overload keeps the callback target alive for the lifetime of
-    // the stream, closing the classic error-callback UAF window.
+    // shared_ptr overload keeps callback alive for lifetime of stream
     builder.setErrorCallback(wrapper);
 
     oboe::Result result = builder.openStream(wrapper->stream);
@@ -472,6 +486,22 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
         return 0;
     }
 
+    // Rule 4: Step 5 - Validate actual stream parameters & reconcile
+    const int32_t actualChannels = wrapper->stream->getChannelCount();
+    const int32_t actualStreamRate = wrapper->stream->getSampleRate();
+    wrapper->actualRate.store(actualStreamRate, std::memory_order_release);
+    wrapper->dsp.setSampleRate(static_cast<double>(actualStreamRate));
+
+    if (actualChannels != channelCount) {
+        wrapper->configuredChannelCount = actualChannels;
+        wrapper->writeScratch_.assign(
+            OboeStreamWrapper::kWriteScratchFrames * static_cast<size_t>(std::max(1, actualChannels)),
+            0.0f);
+    }
+    wrapper->resampler.configure(sampleRate, actualStreamRate,
+                                 actualChannels, antigravity::ResampleQuality::SINC_FAST);
+
+    // Rule 4: Step 6 - Start stream only after render-path is 100% prepared
     result = wrapper->stream->requestStart();
     if (result != oboe::Result::OK) {
         LOGE("Failed to start Oboe stream: %s", oboe::convertToText(result));
@@ -479,27 +509,15 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
         return 0;
     }
 
-    const int32_t actualChannels = wrapper->stream->getChannelCount();
-    wrapper->actualRate.store(wrapper->stream->getSampleRate(), std::memory_order_release);
-    wrapper->dsp.setSampleRate(static_cast<double>(wrapper->stream->getSampleRate()));
-    wrapper->resampler.configure(sampleRate, wrapper->stream->getSampleRate(),
-                                 actualChannels, antigravity::ResampleQuality::SINC_FAST);
-
-    // Preallocate the fixed data-path buffers ONCE (P0-4/P0-16): the render
-    // thread never resizes or reallocates anything from this point on.
-    wrapper->ring_.assign(OboeStreamWrapper::kRingCapacitySamples, 0.0f);
-    wrapper->writeScratch_.assign(
-        OboeStreamWrapper::kWriteScratchFrames * static_cast<size_t>(std::max(1, actualChannels)),
-        0.0f);
-
-    LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d",
+    LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d ch=%d",
          oboe::convertToText(wrapper->stream->getAudioApi()),
          (wrapper->stream->getSharingMode() == oboe::SharingMode::Exclusive)
              ? "EXCLUSIVE" : "SHARED",
          static_cast<unsigned long long>(gen),
          wrapper->stream->getDeviceId(), sampleRate,
-         wrapper->stream->getSampleRate());
+         actualStreamRate, actualChannels);
 
+    // Rule 4: Step 7 - Publish stream handle
     return registerStream(wrapper);
 }
 
@@ -575,10 +593,9 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     }
     const int32_t totalSamples = static_cast<int32_t>(totalSamplesU);
 
-    // Grow scratch only when genuinely needed (format change / first call).
+    // Zero allocation in hot path (Rule 3): reject safely if exceeding preallocated capacity.
     if (static_cast<size_t>(totalSamples) > wrapper->pcmFloatScratchBuffer.size()) {
-        wrapper->pcmFloatScratchBuffer.resize(
-            static_cast<size_t>(totalSamples) * 2u);
+        return kErrBadArguments;
     }
     float *scratch = wrapper->pcmFloatScratchBuffer.data();
 
@@ -663,25 +680,21 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     }
 
     // ---- Resampling path with explicit consumed-frames contract ----
-    // Phase A: DSP + resampler produce into RENDER-OWNED scratch; output is
-    //          appended to the fixed ring (overflow = device stall).
+    // Phase A: DSP + resampler produce into preallocated internal workspaces;
+    //          output pointer r.outputData is appended to the fixed ring.
     // Phase B: drain ring -> hardware with NO LOCK held during Oboe I/O.
-    // The resampler consumes ALL provided input (buffered internally), so we
-    // report full input consumption every call and staging owns the produced
-    // output until hardware accepts it. Unresampled data is never written and
-    // no produced frames are ever dropped.
     if (!bypassDsp) {
         wrapper->dsp.process(scratch, numFrames, channelCount);
     }
 
     antigravity::AudiophileResampler::Result r =
-        wrapper->resampler.process(scratch, numFrames, wrapper->resampleWork_);
+        wrapper->resampler.process(scratch, numFrames);
 
     wrapper->applyClearIfRequested();
     const size_t producedSamples =
         static_cast<size_t>(r.outputFrames) * static_cast<size_t>(channelCount);
-    if (producedSamples > 0) {
-        if (!wrapper->appendToRing(wrapper->resampleWork_.data(), producedSamples)) {
+    if (producedSamples > 0 && r.outputData != nullptr) {
+        if (!wrapper->appendToRing(r.outputData, producedSamples)) {
             LOGW("Resample ring overflow (device stalled); deactivating gen=%llu",
                  static_cast<unsigned long long>(wrapper->generationId));
             wrapper->isActive.store(false, std::memory_order_release);
@@ -782,14 +795,14 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         }
 
         antigravity::AudiophileResampler::Result r =
-            wrapper->resampler.process(data, numFrames, wrapper->resampleWork_);
+            wrapper->resampler.process(data, numFrames);
         env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
 
         wrapper->applyClearIfRequested();
         const size_t producedSamples =
             static_cast<size_t>(r.outputFrames) * static_cast<size_t>(channelCount);
-        if (producedSamples > 0 &&
-            !wrapper->appendToRing(wrapper->resampleWork_.data(), producedSamples)) {
+        if (producedSamples > 0 && r.outputData != nullptr &&
+            !wrapper->appendToRing(r.outputData, producedSamples)) {
             wrapper->isActive.store(false, std::memory_order_release);
             return kErrStaleOrWrite;
         }
@@ -1069,6 +1082,72 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setHrtfRoomSize(
     if (auto w = getStream(handle)) w->dsp.setHrtfRoomSize(roomSize);
 }
 
+// Batch DSP parameters: updates all feature flags and parameters in one seqlock cycle (Rule 8)
+JNIEXPORT void JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspParametersBatch(
+    JNIEnv *env, jobject thiz, jlong handle,
+    jboolean enabled, jboolean bitPerfectBypass,
+    jbooleanArray activeFlags, jdoubleArray doubleParams,
+    jint outputBitDepth, jboolean invertPhase) {
+    auto w = getStream(handle);
+    if (!w) return;
+
+    antigravity::DspParams p;
+    p.enabled = (enabled == JNI_TRUE);
+    p.bitPerfectBypass = (bitPerfectBypass == JNI_TRUE);
+    p.outputBitDepth = outputBitDepth;
+    p.invertPhase = (invertPhase == JNI_TRUE);
+
+    if (activeFlags && env->GetArrayLength(activeFlags) >= 17) {
+        jboolean flags[17];
+        env->GetBooleanArrayRegion(activeFlags, 0, 17, flags);
+        p.eqActive = (flags[0] == JNI_TRUE);
+        p.autoEqActive = (flags[1] == JNI_TRUE);
+        p.peqActive = (flags[2] == JNI_TRUE);
+        p.limiterActive = (flags[3] == JNI_TRUE);
+        p.ditherActive = (flags[4] == JNI_TRUE);
+        p.replayGainActive = (flags[5] == JNI_TRUE);
+        p.crossfeedActive = (flags[6] == JNI_TRUE);
+        p.balanceActive = (flags[7] == JNI_TRUE);
+        p.spatialActive = (flags[8] == JNI_TRUE);
+        p.bassBoostActive = (flags[9] == JNI_TRUE);
+        p.trebleActive = (flags[10] == JNI_TRUE);
+        p.clarityActive = (flags[11] == JNI_TRUE);
+        p.harmonicExciterActive = (flags[12] == JNI_TRUE);
+        p.saturationActive = (flags[13] == JNI_TRUE);
+        p.stereoExpansionActive = (flags[14] == JNI_TRUE);
+        p.subBassMonoActive = (flags[15] == JNI_TRUE);
+        p.channelTransformActive = (flags[16] == JNI_TRUE);
+    }
+
+    if (doubleParams && env->GetArrayLength(doubleParams) >= 27) {
+        jdouble vals[27];
+        env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
+        p.preAmpGainDb = vals[0];
+        p.bassBoostGainDb = vals[1];
+        p.trebleGainDb = vals[2];
+        p.harmonicExciterLevel = vals[3];
+        p.clarityEnhancerGainDb = vals[4];
+        p.stereoExpansionMultiplier = vals[5];
+        p.dvcVolume = vals[6];
+        p.replayGainMultiplier = vals[7];
+        p.ditherStrength = vals[8];
+        p.warmSaturationLevel = vals[9];
+        p.triodeWarmthLevel = vals[10];
+        p.pentodeTapeLevel = vals[11];
+        p.crossfeedLevel = vals[12];
+        p.limiterThresholdDb = vals[13];
+        p.channelBalance = vals[14];
+        p.airPresenceGainDb = vals[15];
+        p.hrtfRoomSize = vals[16];
+        for (int i = 0; i < 10; ++i) {
+            p.bandGainsDb[i] = vals[17 + i];
+        }
+    }
+
+    w->dsp.setDspParametersBatch(p);
+}
+
 // ---------------- DSD control (engine retained; see truth audit for the
 // absence of any DSD file-decode path feeding it) ----------------
 
@@ -1143,10 +1222,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
     if (env->ExceptionCheck()) { env->ExceptionClear(); return nullptr; }
     if (!infoClass) return nullptr;
 
+    // 20-field constructor with structured IDs (Rule 11)
     jmethodID constructor = env->GetMethodID(
         infoClass, "<init>",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IILjava/lang/String;"
-        "IILjava/lang/String;ZJI)V");
+        "IILjava/lang/String;ZJIIIIIIIIJ)V");
     if (env->ExceptionCheck()) { env->ExceptionClear(); return nullptr; }
     if (!constructor) return nullptr;
 
@@ -1171,6 +1251,21 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
         int32_t xruns = 0;
         if (auto xrunResult = s->getXRunCount()) xruns = xrunResult.value();
 
+        const auto fmt = s->getFormat();
+        int32_t bitDepth = 0;
+        int32_t formatId = static_cast<int32_t>(fmt);
+        if (fmt == oboe::AudioFormat::I16) bitDepth = 16;
+        else if (fmt == oboe::AudioFormat::Float) bitDepth = 32;
+        else if (fmt == oboe::AudioFormat::I24) bitDepth = 24;
+        else if (fmt == oboe::AudioFormat::I32) bitDepth = 32;
+
+        const int32_t apiId = static_cast<int32_t>(s->getAudioApi());
+        const int32_t sharingModeId = (s->getSharingMode() == oboe::SharingMode::Exclusive) ? 1 : 0;
+        const int32_t performanceModeId = static_cast<int32_t>(s->getPerformanceMode());
+        const int32_t stateId = static_cast<int32_t>(s->getState());
+        const int32_t channelMask = static_cast<int32_t>(s->getChannelMask());
+        const jlong streamGen = static_cast<jlong>(wrapper->generationId);
+
         infoObject = env->NewObject(infoClass, constructor,
                                     api, sharing, performance,
                                     static_cast<jint>(s->getSampleRate()),
@@ -1181,7 +1276,15 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
                                     stateStr,
                                     started ? JNI_TRUE : JNI_FALSE,
                                     static_cast<jlong>(s->getFramesWritten()),
-                                    static_cast<jint>(xruns));
+                                    static_cast<jint>(xruns),
+                                    static_cast<jint>(apiId),
+                                    static_cast<jint>(sharingModeId),
+                                    static_cast<jint>(performanceModeId),
+                                    static_cast<jint>(formatId),
+                                    static_cast<jint>(bitDepth),
+                                    static_cast<jint>(channelMask),
+                                    static_cast<jint>(stateId),
+                                    streamGen);
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             infoObject = nullptr;

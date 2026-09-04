@@ -200,7 +200,7 @@ fun EqualizerSheet(
             // STUDIO LISTENING MODES PILLS
             val currentListeningMode by equalizerEngine.listeningMode.collectAsStateWithLifecycle()
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                com.tensorix.antigravityplayer.audio.ListeningMode.values().fastForEach { mode ->
+                com.tensorix.antigravityplayer.audio.ListeningMode.values().forEach { mode ->
                     val isSelected = (mode == currentListeningMode)
                     Box(
                         modifier = Modifier
@@ -309,7 +309,7 @@ fun EqualizerSheet(
                         expanded = presetMenuExpanded,
                         onDismissRequest = { presetMenuExpanded = false }
                     ) {
-                        equalizerEngine.builtInPresets.fastForEach { preset ->
+                        equalizerEngine.builtInPresets.forEach { preset ->
                             DropdownMenuItem(
                                 text = { Text(preset.name) },
                                 onClick = {
@@ -848,5 +848,6 @@ fun AutoEqSelectionDialog(
         }
     )
 }
+
 
 

@@ -98,7 +98,13 @@ data class NativeStreamSnapshot(
     val framesWritten: Long = 0L,
     val underrunCount: Int = 0,
     val bufferSizeInFrames: Int = 0,
-    val confidence: Confidence = Confidence.UNKNOWN
+    val confidence: Confidence = Confidence.UNKNOWN,
+    val bitDepth: Int = 0,
+    val channelMask: Int = 0,
+    val streamGeneration: Long = 0L,
+    val apiId: Int = 0,
+    val sharingModeId: Int = 0,
+    val formatId: Int = 0
 )
 
 data class SignalProcessingPipelineSnapshot(
