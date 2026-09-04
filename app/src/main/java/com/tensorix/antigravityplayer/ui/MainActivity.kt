@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -215,30 +216,30 @@ class MainActivity : ComponentActivity() {
 fun MainAppScreen(
     viewModel: MainViewModel
 ) {
-    val songs by viewModel.songs.collectAsState()
-    val currentSong by viewModel.currentSong.collectAsState()
-    val isPlaying by viewModel.isPlaying.collectAsState()
+    val songs by viewModel.songs.collectAsStateWithLifecycle()
+    val currentSong by viewModel.currentSong.collectAsStateWithLifecycle()
+    val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
     // currentPositionMs intentionally NOT collected here (Phase 22):
     // 200 ms position ticks must not recompose the whole application tree.
-    val durationMs by viewModel.durationMs.collectAsState()
-    val shuffleEnabled by viewModel.shuffleEnabled.collectAsState()
-    val repeatMode by viewModel.repeatMode.collectAsState()
-    val playlists by viewModel.playlists.collectAsState()
-    val playlistsWithSongs by viewModel.playlistsWithSongs.collectAsState()
-    val favoriteSongs by viewModel.favoriteSongs.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val isScanning by viewModel.isScanning.collectAsState()
-    val sortOrder by viewModel.sortOrder.collectAsState()
-    val isSortAscending by viewModel.isSortAscending.collectAsState()
-    val queue by viewModel.queue.collectAsState()
-    val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
-    val hifiActive by viewModel.hifiActive.collectAsState()
+    val durationMs by viewModel.durationMs.collectAsStateWithLifecycle()
+    val shuffleEnabled by viewModel.shuffleEnabled.collectAsStateWithLifecycle()
+    val repeatMode by viewModel.repeatMode.collectAsStateWithLifecycle()
+    val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    val playlistsWithSongs by viewModel.playlistsWithSongs.collectAsStateWithLifecycle()
+    val favoriteSongs by viewModel.favoriteSongs.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val sortOrder by viewModel.sortOrder.collectAsStateWithLifecycle()
+    val isSortAscending by viewModel.isSortAscending.collectAsStateWithLifecycle()
+    val queue by viewModel.queue.collectAsStateWithLifecycle()
+    val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
+    val hifiActive by viewModel.hifiActive.collectAsStateWithLifecycle()
 
-    val lyricsLines by viewModel.lyricsLines.collectAsState()
-    val audioSnapshot by viewModel.audioSnapshot.collectAsState()
-    val isBitPerfectMode by viewModel.isBitPerfectMode.collectAsState()
-    val isSampleRateMatching by viewModel.isSampleRateMatching.collectAsState()
-    val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsState()
+    val lyricsLines by viewModel.lyricsLines.collectAsStateWithLifecycle()
+    val audioSnapshot by viewModel.audioSnapshot.collectAsStateWithLifecycle()
+    val isBitPerfectMode by viewModel.isBitPerfectMode.collectAsStateWithLifecycle()
+    val isSampleRateMatching by viewModel.isSampleRateMatching.collectAsStateWithLifecycle()
+    val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsStateWithLifecycle()
 
     var currentTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current

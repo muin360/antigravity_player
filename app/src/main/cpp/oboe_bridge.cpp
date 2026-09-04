@@ -346,7 +346,7 @@ public:
         const int32_t rate = actualRate.load(std::memory_order_relaxed);
         if (rate <= 0) return atomicTimestampUs.load(std::memory_order_relaxed);
         const int64_t us = (frames * 1000000LL) / rate;
-        atomicTimestampUs.store(us, std::memory_order_relaxed);
+        atomicTimestampUs.store(us, std::memory_order_release);
         return us;
     }
 
@@ -1186,7 +1186,14 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
             env->ExceptionClear();
             infoObject = nullptr;
         }
+
+        env->DeleteLocalRef(api);
+        env->DeleteLocalRef(sharing);
+        env->DeleteLocalRef(performance);
+        env->DeleteLocalRef(formatStr);
+        env->DeleteLocalRef(stateStr);
     }
+    env->DeleteLocalRef(infoClass);
     return infoObject;
 }
 

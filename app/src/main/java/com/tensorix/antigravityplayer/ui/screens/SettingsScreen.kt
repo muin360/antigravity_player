@@ -67,7 +67,7 @@ fun SettingsScreen(
     var showProfilePicker by remember { mutableStateOf(false) }
     
     val activeProfile by if (hifiProfileManager != null) {
-        hifiProfileManager.activeProfile.collectAsState()
+        hifiProfileManager.activeProfile.collectAsStateWithLifecycle()
     } else {
         remember { mutableStateOf(null) }
     }
@@ -374,7 +374,7 @@ fun SettingsScreen(
         }
 
         if (showProfilePicker && hifiProfileManager != null) {
-            val profiles by hifiProfileManager.allProfiles.collectAsState()
+            val profiles by hifiProfileManager.allProfiles.collectAsStateWithLifecycle()
             AlertDialog(
                 onDismissRequest = { showProfilePicker = false },
                 title = { Text("Select Master Profile", color = PrimaryCyan) },
@@ -538,3 +538,4 @@ private fun HardwareToggleRow(
         )
     }
 }
+

@@ -119,8 +119,8 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                             MediaMetadataRetriever.METADATA_KEY_SAMPLERATE else -1
 
                         sampleRate = if (sampleRateKey >= 0) retriever.extractMetadata(sampleRateKey)?.toIntOrNull() ?: 0 else 0
-                    } catch (e: Exception) {
-                        // Silently continue if retriever unsupported for this item
+                    } catch (e: Throwable) {
+                        // Silently continue if retriever unsupported or throws native Error for this item
                     } finally {
                         runCatching { retriever.release() }
                     }

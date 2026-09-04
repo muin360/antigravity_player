@@ -4,6 +4,8 @@ package com.tensorix.antigravityplayer.ui.screens
 
 import com.tensorix.antigravityplayer.audio.VendorDacManager
 import com.tensorix.antigravityplayer.audio.HardwareHiFiVerifier
+import com.tensorix.antigravityplayer.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -50,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -183,7 +186,7 @@ fun AudiophileInfoScreen(
 
         // UNIVERSAL HI-FI HARDWARE & 3-MODE STUDIO LISTENING SELECTOR
         val eqEngine = PlaybackService.instance?.equalizerEngine
-        val currentMode = eqEngine?.listeningMode?.collectAsState()?.value ?: com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE
+        val currentMode = eqEngine?.listeningMode?.collectAsStateWithLifecycle()?.value ?: com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE
         val canon = snapshot.output.canonicalSnapshot
         val dacName = canon?.dac?.modelName?.value?.takeIf { it.isNotBlank() && !it.contains("Unknown") }
             ?: output.activeRoute?.productName ?: output.activeRoute?.deviceName ?: "Hardware Audio DAC"
@@ -1012,7 +1015,7 @@ fun AudiophileInfoScreen(
                     SpecItem("3.5mm Headset", if (hardwareReport.isWiredHeadsetConnected) "CONNECTED" else "UNATTACHED")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                val oboeMode = PlaybackService.instance?.oboeMode?.collectAsState()?.value ?: "UNAVAILABLE"
+                val oboeMode = PlaybackService.instance?.oboeMode?.collectAsStateWithLifecycle()?.value ?: "UNAVAILABLE"
                 val oboeColor = when (oboeMode) {
                     "EXCLUSIVE" -> Color(0xFF00E676)
                     "SHARED" -> Color(0xFFFFAB00)
@@ -1349,7 +1352,7 @@ private fun LiveTelemetryHUD() {
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("ULTIMATE 64-BIT PEAK & PHASE MONITOR", color = PrimaryCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
+            Text(stringResource(R.string.peak_phase_monitor_title), color = PrimaryCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
             Text(text = "CORR: ${"%.2f".format(phaseCorr)}", color = if (phaseCorr < 0) Color.Red else PrimaryCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(modifier = Modifier.height(8.dp))
@@ -1484,3 +1487,5 @@ private fun SignalChainNode(
         }
     }
 }
+
+

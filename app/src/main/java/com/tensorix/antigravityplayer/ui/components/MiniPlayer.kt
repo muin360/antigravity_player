@@ -57,7 +57,7 @@ fun MiniPlayer(
 
     // Phase 22: high-frequency position updates are collected HERE so only
     // this subtree recomposes on each tick, never the whole application.
-    val progressMs by progressMsFlow.collectAsState()
+    val progressMs by progressMsFlow.collectAsStateWithLifecycle()
 
     val progressFraction by animateFloatAsState(
         targetValue = if (durationMs > 0) (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f,
@@ -251,3 +251,4 @@ fun MiniPlayer(
         }
     }
 }
+

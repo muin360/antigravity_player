@@ -113,6 +113,7 @@ dependencies {
     // dependency was declared but no NavHost/NavController exists.
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.2")
 
     // Image loading
     implementation("io.coil-kt:coil-compose:2.6.0")

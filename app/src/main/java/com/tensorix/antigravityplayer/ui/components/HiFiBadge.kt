@@ -26,9 +26,9 @@ import com.tensorix.antigravityplayer.audio.HiFiBadgeState
 
 @Composable
 fun HiFiBadge(modifier: Modifier = Modifier) {
-    val isActive by HiFiBadgeState.isHiFiActive.collectAsState()
-    val label by HiFiBadgeState.hifiLabel.collectAsState()
-    val detail by HiFiBadgeState.hifiDetail.collectAsState()
+    val isActive by HiFiBadgeState.isHiFiActive.collectAsStateWithLifecycle()
+    val label by HiFiBadgeState.hifiLabel.collectAsStateWithLifecycle()
+    val detail by HiFiBadgeState.hifiDetail.collectAsStateWithLifecycle()
 
     val infiniteTransition = rememberInfiniteTransition(label = "hifi")
     val glowAlpha by infiniteTransition.animateFloat(
@@ -107,3 +107,4 @@ fun HiFiBadge(modifier: Modifier = Modifier) {
         }
     }
 }
+

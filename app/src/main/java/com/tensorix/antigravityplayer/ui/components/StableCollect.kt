@@ -2,13 +2,13 @@ package com.tensorix.antigravityplayer.ui.components
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * BUG-FIX helper: `nullableFlow?.collectAsState()` with an inline
+ * BUG-FIX helper: `nullableFlow?.collectAsStateWithLifecycle()` with an inline
  * `?: MutableStateFlow(default)` fallback recreated the fallback flow on EVERY
  * recomposition, tearing down and re-subscribing the collector each frame.
  *
@@ -22,5 +22,5 @@ fun <T> stableCollect(
     default: T
 ): State<T> {
     val resolved = remember(source) { source ?: MutableStateFlow(default) }
-    return resolved.collectAsState()
+    return resolved.collectAsStateWithLifecycle()
 }

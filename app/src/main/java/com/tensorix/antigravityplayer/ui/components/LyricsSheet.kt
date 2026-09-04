@@ -27,6 +27,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +56,7 @@ fun LyricsSheet(
     if (song == null) return
 
     // Phase 22: lyric-sync position updates stay scoped to this sheet.
-    val currentPositionMs by currentPositionMsFlow.collectAsState()
+    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
@@ -161,3 +162,4 @@ fun LyricsSheet(
         }
     }
 }
+

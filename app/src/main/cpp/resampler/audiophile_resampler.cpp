@@ -192,6 +192,9 @@ AudiophileResampler::Result AudiophileResampler::process(
             for (int32_t c = 0; c < ch; ++c) {
                 double sample1 = 0.0;
                 double sample2 = 0.0;
+                
+                #pragma clang loop vectorize(enable)
+                #pragma omp simd
                 for (int t = 0; t < taps; ++t) {
                     const int32_t srcFrame =
                         std::clamp(baseInFrame - halfTaps + t, 0, totalWorkFrames - 1);
@@ -199,6 +202,7 @@ AudiophileResampler::Result AudiophileResampler::process(
                     sample1 += srcSample * phaseWeights1[t];
                     sample2 += srcSample * phaseWeights2[t];
                 }
+                
                 const double sample = sample1 + (sample2 - sample1) * phaseFrac;
                 outBuffer[static_cast<size_t>(outFrameCount) * ch + c] =
                     static_cast<float>(std::clamp(sample, -1.0, 1.0));

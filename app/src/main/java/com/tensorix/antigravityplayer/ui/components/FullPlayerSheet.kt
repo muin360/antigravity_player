@@ -62,7 +62,7 @@ fun FullPlayerSheet(
     if (song == null) return
 
     // Phase 22: position updates recompose only this sheet, not the app tree.
-    val currentPositionMs by currentPositionMsFlow.collectAsState()
+    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 

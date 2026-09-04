@@ -688,9 +688,10 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     if (channelCount > 1 && sumL2 > 1e-12 && sumR2 > 1e-12) {
         const float corr = static_cast<float>(sumLR / (std::sqrt(sumL2 * sumR2) + 1e-12));
         phaseCorrelation_.store(phaseCorrelation_.load(std::memory_order_relaxed) * 0.95f +
-                                std::clamp(corr, -1.0f, 1.0f) * 0.05f,
+                                std::clamp(corr, -1.0, 1.0) * 0.05f,
                                 std::memory_order_relaxed);
     }
 }
 
 } // namespace antigravity
+

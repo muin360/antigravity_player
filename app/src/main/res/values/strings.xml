@@ -114,4 +114,9 @@
     <string name="cd_favorite">Toggle favorite</string>
     <string name="cd_volume_slider">Volume slider</string>
     <string name="cd_seek_bar">Playback seek bar</string>
+
+    <string name="peak_phase_monitor_title">ULTIMATE 64-BIT PEAK &amp; PHASE MONITOR</string>
+    <string name="correlation_label">CORR: </string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_sleep_timer">Sleep timer</string>
 </resources>

@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -84,28 +85,28 @@ fun EqualizerSheet(
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val isEnabled by equalizerEngine.isEnabled.collectAsState()
-    val bandCount by equalizerEngine.bandCount.collectAsState()
-    val bandFrequencies by equalizerEngine.bandFrequencies.collectAsState()
-    val bandLevels by equalizerEngine.bandLevels.collectAsState()
-    val minLevel by equalizerEngine.minBandLevel.collectAsState()
-    val maxLevel by equalizerEngine.maxBandLevel.collectAsState()
+    val isEnabled by equalizerEngine.isEnabled.collectAsStateWithLifecycle()
+    val bandCount by equalizerEngine.bandCount.collectAsStateWithLifecycle()
+    val bandFrequencies by equalizerEngine.bandFrequencies.collectAsStateWithLifecycle()
+    val bandLevels by equalizerEngine.bandLevels.collectAsStateWithLifecycle()
+    val minLevel by equalizerEngine.minBandLevel.collectAsStateWithLifecycle()
+    val maxLevel by equalizerEngine.maxBandLevel.collectAsStateWithLifecycle()
 
-    val bassBoost by equalizerEngine.bassBoostStrength.collectAsState()
-            val preAmpGain by equalizerEngine.preAmpGainDb.collectAsState()
-    val clarityGain by equalizerEngine.clarityGain.collectAsState()
-    val airPresence by equalizerEngine.airPresence.collectAsState()
-    val isTurboSharpness by equalizerEngine.isTurboSharpness.collectAsState()
-    val warmSaturation by equalizerEngine.warmSaturation.collectAsState()
-    val crossfeedLevel by equalizerEngine.crossfeedLevel.collectAsState()
-    val channelBalance by equalizerEngine.channelBalance.collectAsState()
-    val invertPhase by equalizerEngine.invertPhase.collectAsState()
-    val stereoExpansion by equalizerEngine.stereoExpansion.collectAsState()
-    val limiterThreshold by equalizerEngine.limiterThreshold.collectAsState()
-    val currentPresetName by equalizerEngine.currentPresetName.collectAsState()
+    val bassBoost by equalizerEngine.bassBoostStrength.collectAsStateWithLifecycle()
+            val preAmpGain by equalizerEngine.preAmpGainDb.collectAsStateWithLifecycle()
+    val clarityGain by equalizerEngine.clarityGain.collectAsStateWithLifecycle()
+    val airPresence by equalizerEngine.airPresence.collectAsStateWithLifecycle()
+    val isTurboSharpness by equalizerEngine.isTurboSharpness.collectAsStateWithLifecycle()
+    val warmSaturation by equalizerEngine.warmSaturation.collectAsStateWithLifecycle()
+    val crossfeedLevel by equalizerEngine.crossfeedLevel.collectAsStateWithLifecycle()
+    val channelBalance by equalizerEngine.channelBalance.collectAsStateWithLifecycle()
+    val invertPhase by equalizerEngine.invertPhase.collectAsStateWithLifecycle()
+    val stereoExpansion by equalizerEngine.stereoExpansion.collectAsStateWithLifecycle()
+    val limiterThreshold by equalizerEngine.limiterThreshold.collectAsStateWithLifecycle()
+    val currentPresetName by equalizerEngine.currentPresetName.collectAsStateWithLifecycle()
 
-    val hrtfSpatialEnabled by equalizerEngine.hrtfSpatialEnabled.collectAsState()
-    val hrtfRoomSize by equalizerEngine.hrtfRoomSize.collectAsState()
+    val hrtfSpatialEnabled by equalizerEngine.hrtfSpatialEnabled.collectAsStateWithLifecycle()
+    val hrtfRoomSize by equalizerEngine.hrtfRoomSize.collectAsStateWithLifecycle()
 
     val autoEqEngine = PlaybackService.instance?.autoEqEngine
     val activeAutoEqProfile by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.activeProfile, null)
@@ -191,7 +192,7 @@ fun EqualizerSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             // STUDIO LISTENING MODES PILLS
-            val currentListeningMode by equalizerEngine.listeningMode.collectAsState()
+            val currentListeningMode by equalizerEngine.listeningMode.collectAsStateWithLifecycle()
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 com.tensorix.antigravityplayer.audio.ListeningMode.values().forEach { mode ->
                     val isSelected = (mode == currentListeningMode)
@@ -563,7 +564,7 @@ fun EqualizerSheet(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Sub-Bass Mono (<80Hz)
-                val subBassMono by equalizerEngine.subBassMono.collectAsState()
+                val subBassMono by equalizerEngine.subBassMono.collectAsStateWithLifecycle()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -841,3 +842,4 @@ fun AutoEqSelectionDialog(
         }
     )
 }
+
