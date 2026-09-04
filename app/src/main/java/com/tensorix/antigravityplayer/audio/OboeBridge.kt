@@ -100,6 +100,11 @@ object OboeBridge {
      */
     external fun getStreamFrameTelemetry(handle: Long): LongArray?
 
+    // Zero-allocation scalar telemetry for the real-time audio thread
+    external fun getOutputFramesProduced(handle: Long): Long
+    external fun getHardwareFramesWritten(handle: Long): Long
+    external fun getStagedPendingFrames(handle: Long): Long
+
     // Structured IDs (Rule 11)
     object AudioApiId {
         const val UNSPECIFIED = 0

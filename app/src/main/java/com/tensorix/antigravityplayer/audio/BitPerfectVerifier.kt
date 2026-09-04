@@ -265,20 +265,38 @@ object BitPerfectVerifier {
             failureReasons.add("Channel transformation, downmixing, or spatial remapping is active")
         }
 
-        // 31. No lossy PCM conversion (Rule 9: verified from actual evidence)
+        // 31. No lossy PCM conversion (Rule 9 & 10: verified from actual evidence)
         val sourceBits = snapshot.source.bitDepth.value
         val outputBits = snapshot.actualOutput.bitDepth.value
+        val isFloatOutput = snapshot.actualOutput.encoding.value.contains("Float", ignoreCase = true)
         val bitDepthPreserved = when {
             sourceBits > 0 && outputBits > 0 -> {
-                // If output depth >= source depth, or output is 32-bit Float, precision is preserved
-                outputBits >= sourceBits || snapshot.actualOutput.encoding.value.contains("Float", ignoreCase = true)
+                if (isFloatOutput) {
+                    // IEEE 754 32-bit float has 24 bits of significand precision (23 explicit + 1 implicit).
+                    // 16-bit and 24-bit integer PCM fit losslessly with exact mathematical identity.
+                    // 32-bit integer PCM loses 8 bits of precision when mapped to 32-bit float and is NOT bit-perfect.
+                    sourceBits <= 24
+                } else {
+                    // Integer pipeline: output bit depth must be >= source bit depth
+                    outputBits >= sourceBits
+                }
             }
             else -> false // Unknown output format cannot claim bit-perfect preservation
         }
         val noLossyPcm = encodingCompatible && bitDepthPreserved
         evidence.add(BitPerfectEvidence("No Lossy PCM", noLossyPcm, EvidenceSource.OBOE_STREAM))
         if (!noLossyPcm) {
-            failureReasons.add("PCM bit-depth truncation or lossy downconversion detected (Source: ${sourceBits}-bit, Output: ${outputBits}-bit)")
+            failureReasons.add("PCM bit-depth truncation or lossy downconversion detected (Source: ${sourceBits}-bit, Output: ${outputBits}-bit ${if (isFloatOutput) "Float" else "Integer"})")
+        }
+
+        // Rule 40: DSD Decimation Detection (DSD source decimated to PCM alters 1-bit bitstream)
+        val isDsdSource = snapshot.source.encoding.value.contains("DSD", ignoreCase = true) ||
+                         snapshot.source.encoding.value.contains("DSF", ignoreCase = true) ||
+                         snapshot.source.encoding.value.contains("DFF", ignoreCase = true)
+        val dsdNotDecimated = !isDsdSource || snapshot.actualOutput.encoding.value.contains("DSD", ignoreCase = true)
+        evidence.add(BitPerfectEvidence("DSD Bitstream Integrity", dsdNotDecimated, EvidenceSource.OBOE_STREAM))
+        if (!dsdNotDecimated) {
+            failureReasons.add("DSD 1-bit bitstream is decimated to PCM; native 1-bit stream cannot be preserved")
         }
 
         // 32. Direct HAL path is ACTUALLY active (runtime proof)

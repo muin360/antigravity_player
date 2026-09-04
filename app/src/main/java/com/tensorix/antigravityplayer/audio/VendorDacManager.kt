@@ -177,7 +177,7 @@ object VendorDacManager {
     }
 
     object GenericAdapter : VendorAdapter {
-        override fun activate(context: Context): Boolean = true
+        override fun activate(context: Context): Boolean = false
         override fun deactivate(context: Context) {}
     }
 

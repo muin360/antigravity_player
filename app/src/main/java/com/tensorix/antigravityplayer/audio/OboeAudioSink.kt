@@ -564,8 +564,8 @@ class OboeAudioSink(
         val handle = streamHandle
         if (handle == 0L) return false
 
-        val telemetry = OboeBridge.getStreamFrameTelemetry(handle) ?: return false
-        val produced = telemetry.getOrNull(0) ?: 0L
+        // Zero-allocation scalar getters (Rule 4 / Rule 14)
+        val produced = OboeBridge.getOutputFramesProduced(handle)
         if (produced <= 0L) return false
 
         // getPlaybackPositionFrames is already in the OUTPUT frame domain and
@@ -575,7 +575,7 @@ class OboeAudioSink(
         if (SinkClockMath.pendingOutputFrames(produced, playedFrames) > 0) return true
 
         // Belt & braces: any frames still sitting in the staging ring count.
-        val staged = telemetry.getOrNull(2) ?: 0L
+        val staged = OboeBridge.getStagedPendingFrames(handle)
         return staged > 0L
     }
 

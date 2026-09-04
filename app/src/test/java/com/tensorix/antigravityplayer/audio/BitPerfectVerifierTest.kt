@@ -282,6 +282,42 @@ class BitPerfectVerifierTest {
         assertTrue(result.failureReasons.any { it.contains("unknown or unverified") })
     }
 
+    @Test
+    fun `NEGATIVE TEST - 32-bit integer PCM routed to 32-bit Float output yields UNAVAILABLE (Rule 10)`() {
+        val snapshot = createBaseSnapshot().copy(
+            source = createFormat(44100, 32, 2, "WAV_PCM32"),
+            actualOutput = createFormat(44100, 32, 2, "Float")
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.UNAVAILABLE, result.state)
+        assertTrue(result.failureReasons.any { it.contains("PCM bit-depth truncation or lossy downconversion detected") })
+    }
+
+    @Test
+    fun `POSITIVE TEST - 24-bit PCM routed to 32-bit Float output preserves bit depth (Rule 10)`() {
+        val snapshot = createBaseSnapshot().copy(
+            source = createFormat(96000, 24, 2, "FLAC"),
+            actualOutput = createFormat(96000, 32, 2, "Float")
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.VERIFIED, result.state)
+        assertTrue(result.evidence.first { it.description == "No Lossy PCM" }.isSatisfied)
+    }
+
+    @Test
+    fun `NEGATIVE TEST - DSD source decimated to PCM yields UNAVAILABLE (Rule 40)`() {
+        val snapshot = createBaseSnapshot().copy(
+            source = createFormat(2822400, 1, 2, "DSD_DFF"),
+            actualOutput = createFormat(88200, 24, 2, "PCM")
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.UNAVAILABLE, result.state)
+        assertTrue(result.failureReasons.any { it.contains("DSD 1-bit bitstream is decimated to PCM") })
+    }
+
     private fun createBaseSnapshot(): CanonicalAudioRuntimeSnapshot {
         return CanonicalAudioRuntimeSnapshot(
             source = createFormat(44100, 16, 2, "FLAC"),

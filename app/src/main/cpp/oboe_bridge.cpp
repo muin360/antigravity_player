@@ -637,10 +637,13 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
             std::memcpy(scratch, srcBytes, sizeof(float) * static_cast<size_t>(totalSamples));
             break;
         }
-        case 2: {   // ENCODING_PCM_16BIT
-            const int16_t *src16 = reinterpret_cast<const int16_t *>(srcBytes);
+        case 2: {   // ENCODING_PCM_16BIT signed little-endian (alignment-safe)
+            const uint8_t *b = srcBytes;
             for (int32_t i = 0; i < totalSamples; ++i) {
-                scratch[i] = static_cast<float>(src16[i]) * (1.0f / 32768.0f);
+                int16_t s16;
+                std::memcpy(&s16, b, sizeof(int16_t));
+                b += sizeof(int16_t);
+                scratch[i] = static_cast<float>(s16) * (1.0f / 32768.0f);
             }
             break;
         }
@@ -653,18 +656,23 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         case 21: {  // ENCODING_PCM_24BIT packed little-endian
             const uint8_t *b = srcBytes;
             for (int32_t i = 0; i < totalSamples; ++i) {
-                int32_t raw24 = (b[2] << 16) | (b[1] << 8) | b[0];
+                int32_t raw24 = static_cast<int32_t>(b[0]) |
+                               (static_cast<int32_t>(b[1]) << 8) |
+                               (static_cast<int32_t>(b[2]) << 16);
                 b += 3;
                 if (raw24 & 0x800000) raw24 |= ~0xFFFFFF;
                 scratch[i] = static_cast<float>(raw24) * (1.0f / 8388608.0f);
             }
             break;
         }
-        case 22: {  // ENCODING_PCM_32BIT signed
-            const int32_t *src32 = reinterpret_cast<const int32_t *>(srcBytes);
+        case 22: {  // ENCODING_PCM_32BIT signed little-endian (alignment-safe)
+            const uint8_t *b = srcBytes;
             for (int32_t i = 0; i < totalSamples; ++i) {
+                int32_t s32;
+                std::memcpy(&s32, b, sizeof(int32_t));
+                b += sizeof(int32_t);
                 scratch[i] = static_cast<float>(
-                    static_cast<double>(src32[i]) * (1.0 / 2147483648.0));
+                    static_cast<double>(s32) * (1.0 / 2147483648.0));
             }
             break;
         }
@@ -1226,6 +1234,32 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getPhaseCorrelation(
     JNIEnv *env, jobject thiz, jlong handle) {
     auto w = getStream(handle);
     return w ? w->dsp.getPhaseCorrelation() : 1.0f;
+}
+
+// Zero-allocation scalar telemetry getters for the real-time audio hot path
+JNIEXPORT jlong JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getOutputFramesProduced(
+    JNIEnv *env, jobject thiz, jlong handle) {
+    auto w = getStream(handle);
+    return w ? static_cast<jlong>(w->outputFramesProduced_.load(std::memory_order_relaxed)) : 0L;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getHardwareFramesWritten(
+    JNIEnv *env, jobject thiz, jlong handle) {
+    auto w = getStream(handle);
+    return w ? static_cast<jlong>(w->atomicFramesWritten.load(std::memory_order_relaxed)) : 0L;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStagedPendingFrames(
+    JNIEnv *env, jobject thiz, jlong handle) {
+    auto w = getStream(handle);
+    if (!w) return 0L;
+    const uint64_t stagedFrames =
+        w->stagedSamples() /
+        static_cast<uint64_t>(std::max(1, w->configuredChannelCount));
+    return static_cast<jlong>(stagedFrames);
 }
 
 // Frame-domain telemetry (P0-2): all values in RESAMPLED-OUTPUT frames.
