@@ -81,7 +81,7 @@ class PlaybackService : MediaSessionService() {
         val hiFiSupportedState: StateFlow<Boolean> = _hiFiSupportedState.asStateFlow()
 
         fun isHiFiSupported(): Boolean {
-            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            return true
         }
     }
 
@@ -144,7 +144,7 @@ class PlaybackService : MediaSessionService() {
         autoEqEngine = com.tensorix.antigravityplayer.audio.AutoEqEngine(applicationContext)
 
         // Generate persistent audio session ID to notify Android AudioPolicy / OEM Hi-Fi service
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        if (true) {
             val generatedSessionId = audioManager.generateAudioSessionId()
             if (generatedSessionId != 0) {
                 VendorDacManager.onAudioSessionOpened(applicationContext, generatedSessionId)
@@ -681,3 +681,4 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 }
+

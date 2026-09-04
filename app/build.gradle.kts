@@ -11,7 +11,7 @@ ksp {
 
 android {
     namespace = "com.tensorix.antigravityplayer"
-    compileSdk = 34
+    compileSdk = 37
 
     // Release signing credentials are loaded from ~/.gradle/gradle.properties
     // to keep secrets out of VCS. Required keys:
@@ -32,7 +32,7 @@ android {
     defaultConfig {
         applicationId = "com.tensorix.antigravityplayer"
         minSdk = 27
-        targetSdk = 34
+        targetSdk = 37
         versionCode = 4
         versionName = "2.0.0"
 
@@ -91,9 +91,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -147,4 +145,10 @@ dependencies {
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.3.1")
     // Real org.json for JVM tests (android.jar ships only method stubs).
     testImplementation("org.json:json:20240303")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

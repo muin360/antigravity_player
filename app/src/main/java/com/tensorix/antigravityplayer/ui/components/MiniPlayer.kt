@@ -1,4 +1,5 @@
 package com.tensorix.antigravityplayer.ui.components
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.*
@@ -251,4 +252,7 @@ fun MiniPlayer(
         }
     }
 }
+
+
+
 

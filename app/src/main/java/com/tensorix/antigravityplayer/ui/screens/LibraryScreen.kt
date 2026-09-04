@@ -36,14 +36,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.remember
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -181,7 +187,7 @@ fun LibraryScreen(
                     expanded = sortMenuExpanded,
                     onDismissRequest = { sortMenuExpanded = false }
                 ) {
-                    SortOrder.values().forEach { order ->
+                    SortOrder.values().fastForEach { order ->
                         DropdownMenuItem(
                             text = {
                                 val indicator = if (sortOrder == order) (if (isSortAscending) " ↑" else " ↓") else ""
@@ -310,3 +316,4 @@ fun LibraryScreen(
         )
     }
 }
+

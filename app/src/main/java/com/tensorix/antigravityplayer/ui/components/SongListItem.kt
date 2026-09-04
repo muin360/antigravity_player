@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -156,7 +157,7 @@ fun SongListItem(
                 )
 
                 if (playlistSubMenuExpanded) {
-                    playlists.forEach { playlist ->
+                    playlists.fastForEach { playlist ->
                         DropdownMenuItem(
                             text = { Text("  ➔ ${playlist.name}") },
                             onClick = {
@@ -186,4 +187,5 @@ fun formatDuration(durationMs: Long): String {
     val seconds = totalSeconds % 60
     return String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
 }
+
 

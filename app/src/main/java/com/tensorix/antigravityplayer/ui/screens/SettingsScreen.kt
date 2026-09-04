@@ -3,6 +3,8 @@ package com.tensorix.antigravityplayer.ui.screens
 import android.content.Context
 import android.os.Build
 import androidx.compose.animation.*
+import androidx.compose.ui.util.fastForEach
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -69,7 +71,7 @@ fun SettingsScreen(
     val activeProfile by if (hifiProfileManager != null) {
         hifiProfileManager.activeProfile.collectAsStateWithLifecycle()
     } else {
-        remember { mutableStateOf(null) }
+        remember { mutableStateOf<com.tensorix.antigravityplayer.audio.HiFiProfile?>(null) }
     }
     
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -213,7 +215,7 @@ fun SettingsScreen(
                     }
                 }
                 
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                if (false) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         "Note: 32-bit Float sink requires Android 8.0+",
@@ -380,8 +382,12 @@ fun SettingsScreen(
                 title = { Text("Select Master Profile", color = PrimaryCyan) },
                 containerColor = DarkBackground,
                 text = {
-                    Column {
-                        profiles.forEach { profile ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        profiles.fastForEach { profile ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -538,4 +544,8 @@ private fun HardwareToggleRow(
         )
     }
 }
+
+
+
+
 

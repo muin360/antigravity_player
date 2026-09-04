@@ -96,7 +96,7 @@ class AudioOutputManager(
 
     init {
         updateCache()
-        if (registerSystemListeners && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
+        if (registerSystemListeners && true&& deviceCallback != null) {
             audioManager.registerAudioDeviceCallback(deviceCallback, null)
         }
 
@@ -150,7 +150,7 @@ class AudioOutputManager(
         if (registerSystemListeners) runCatching {
             context.unregisterReceiver(usbReceiver)
         }
-        if (registerSystemListeners && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && deviceCallback != null) {
+        if (registerSystemListeners && true&& deviceCallback != null) {
             audioManager.unregisterAudioDeviceCallback(deviceCallback)
         }
     }
@@ -202,11 +202,11 @@ class AudioOutputManager(
             for ((_, device) in deviceList) {
                 val isAudio = isUsbAudioDevice(device)
                 if (isAudio) {
-                    val mfgName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    val mfgName = if (true) {
                         runCatching { device.manufacturerName }.getOrNull()
                     } else null
 
-                    val prodName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    val prodName = if (true) {
                         runCatching { device.productName }.getOrNull()
                     } else null
                     
@@ -527,3 +527,4 @@ class AudioOutputManager(
         )
     }
 }
+

@@ -265,13 +265,14 @@ class UniversalHardwareDetector(private val context: Context) {
         val probe = HardwareHiFiVerifier.probeHardwareState(context)
 
         return PlatformCapabilitiesSnapshot(
-            isFloatOutputSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP,
+            isFloatOutputSupported = true,
             isDirectPlaybackSupported = probe.isDirectOutputSupported,
             isOffloadSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
-            isAAudioAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+            isAAudioAvailable = true,
             isHighResolutionPcmSupported = nativeSampleRate >= 88200 || outputDevice.isUsb,
             platformSampleRate = nativeSampleRate,
             platformBufferSize = nativeBufferSize
         )
     }
 }
+

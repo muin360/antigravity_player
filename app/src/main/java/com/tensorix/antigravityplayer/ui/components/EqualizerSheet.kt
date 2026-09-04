@@ -37,12 +37,18 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.remember
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -194,7 +200,7 @@ fun EqualizerSheet(
             // STUDIO LISTENING MODES PILLS
             val currentListeningMode by equalizerEngine.listeningMode.collectAsStateWithLifecycle()
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                com.tensorix.antigravityplayer.audio.ListeningMode.values().forEach { mode ->
+                com.tensorix.antigravityplayer.audio.ListeningMode.values().fastForEach { mode ->
                     val isSelected = (mode == currentListeningMode)
                     Box(
                         modifier = Modifier
@@ -303,7 +309,7 @@ fun EqualizerSheet(
                         expanded = presetMenuExpanded,
                         onDismissRequest = { presetMenuExpanded = false }
                     ) {
-                        equalizerEngine.builtInPresets.forEach { preset ->
+                        equalizerEngine.builtInPresets.fastForEach { preset ->
                             DropdownMenuItem(
                                 text = { Text(preset.name) },
                                 onClick = {
@@ -842,4 +848,5 @@ fun AutoEqSelectionDialog(
         }
     )
 }
+
 

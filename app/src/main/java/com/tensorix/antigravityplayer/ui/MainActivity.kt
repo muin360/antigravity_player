@@ -45,13 +45,20 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.remember
+import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -532,7 +539,7 @@ fun SleepTimerDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                listOf(15, 30, 45, 60).forEach { mins ->
+                listOf(15, 30, 45, 60).fastForEach { mins ->
                     Button(
                         onClick = { onSetTimer(mins) },
                         colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),

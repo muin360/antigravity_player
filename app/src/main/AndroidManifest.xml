@@ -24,8 +24,7 @@
     <!-- Required for writing Vivo/OEM Hi-Fi settings -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
-    <application
-        android:name=".AntigravityApp"
+    <application`n        android:enableOnBackInvokedCallback="true"`n        android:name=".AntigravityApp"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -88,3 +87,4 @@
 
     </application>
 </manifest>
+
