@@ -64,8 +64,8 @@ import androidx.core.content.ContextCompat
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.media3.common.util.UnstableApi
-import com.tensorix.antigravityplayer.ui.components.AiChatSheet
 import com.tensorix.antigravityplayer.player.PlaybackService
 import com.tensorix.antigravityplayer.ui.components.EqualizerSheet
 import com.tensorix.antigravityplayer.ui.components.FullPlayerSheet
@@ -77,7 +77,6 @@ import com.tensorix.antigravityplayer.ui.screens.FavoritesScreen
 import com.tensorix.antigravityplayer.ui.screens.LibraryScreen
 import com.tensorix.antigravityplayer.ui.screens.PlaylistsScreen
 import com.tensorix.antigravityplayer.ui.screens.SettingsScreen
-import com.tensorix.antigravityplayer.ui.screens.YtSearchScreen
 import com.tensorix.antigravityplayer.ui.theme.AntigravityTheme
 import com.tensorix.antigravityplayer.ui.theme.DarkBackground
 import com.tensorix.antigravityplayer.ui.theme.PrimaryCyan
@@ -107,25 +106,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val micPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            viewModel.startVoiceInput()
-        } else {
-            viewModel.onMicPermissionDenied()
-        }
-    }
 
-    fun requestVoiceInput() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            viewModel.startVoiceInput()
-        } else {
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Android 12+ Splash Screen API — must be called before super.onCreate()
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         // Premium edge-to-edge: content draws behind transparent system bars.
         enableEdgeToEdge()
@@ -174,8 +159,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 MainAppScreen(
-                    viewModel = viewModel,
-                    onRequestVoiceInput = { requestVoiceInput() }
+                    viewModel = viewModel
                 )
             }
         }
@@ -229,8 +213,7 @@ class MainActivity : ComponentActivity() {
 @UnstableApi
 @Composable
 fun MainAppScreen(
-    viewModel: MainViewModel,
-    onRequestVoiceInput: () -> Unit = {}
+    viewModel: MainViewModel
 ) {
     val songs by viewModel.songs.collectAsState()
     val currentSong by viewModel.currentSong.collectAsState()
@@ -243,7 +226,6 @@ fun MainAppScreen(
     val playlists by viewModel.playlists.collectAsState()
     val playlistsWithSongs by viewModel.playlistsWithSongs.collectAsState()
     val favoriteSongs by viewModel.favoriteSongs.collectAsState()
-    val downloadedSongs by viewModel.downloadedSongs.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
@@ -252,16 +234,6 @@ fun MainAppScreen(
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
     val hifiActive by viewModel.hifiActive.collectAsState()
 
-    val ytSearchResults by viewModel.ytSearchResults.collectAsState()
-    val isYtSearching by viewModel.isYtSearching.collectAsState()
-    val downloadProgress by viewModel.downloadProgress.collectAsState()
-    val downloadingTrackId by viewModel.downloadingTrackId.collectAsState()
-
-    val chatMessages by viewModel.chatMessages.collectAsState()
-    val isAiProcessing by viewModel.isAiProcessing.collectAsState()
-    val isListeningVoice by viewModel.isListeningVoice.collectAsState()
-    val selectedAiProvider by viewModel.selectedAiProvider.collectAsState()
-    val selectedAiModel by viewModel.selectedAiModel.collectAsState()
     val lyricsLines by viewModel.lyricsLines.collectAsState()
     val audioSnapshot by viewModel.audioSnapshot.collectAsState()
     val isBitPerfectMode by viewModel.isBitPerfectMode.collectAsState()
@@ -269,44 +241,17 @@ fun MainAppScreen(
     val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsState()
 
     var currentTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
-        val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
-        val hapticsTick = { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticsTick = { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
     var showFullPlayer by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
-    var showAiChatSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showAudiophileInfoSheet by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = DarkBackground,
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAiChatSheet = true },
-                containerColor = Color.Transparent,
-                shape = CircleShape
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(PrimaryCyan, SecondaryViolet)
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "AI Assistant",
-                        tint = Color.Black,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-        },
         bottomBar = {
             Column {
                 // Mini Player floating bar
@@ -373,22 +318,8 @@ fun MainAppScreen(
                     NavigationBarItem(
                         selected = currentTab == 3,
                         onClick = { hapticsTick(); currentTab = 3 },
-                        icon = { Icon(imageVector = Icons.Default.CloudDownload, contentDescription = "Online YT", modifier = Modifier.size(22.dp)) },
-                        label = { Text("Online", fontSize = 11.sp, fontWeight = if (currentTab == 3) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = PrimaryCyan,
-                            selectedTextColor = PrimaryCyan,
-                            unselectedIconColor = TextSecondary,
-                            unselectedTextColor = TextSecondary,
-                            indicatorColor = Color(0x2600E5FF)
-                        )
-                    )
-
-                    NavigationBarItem(
-                        selected = currentTab == 4,
-                        onClick = { hapticsTick(); currentTab = 4 },
                         icon = { Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(22.dp)) },
-                        label = { Text("Settings", fontSize = 11.sp, fontWeight = if (currentTab == 4) FontWeight.Bold else FontWeight.Normal) },
+                        label = { Text("Settings", fontSize = 11.sp, fontWeight = if (currentTab == 3) FontWeight.Bold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = PrimaryCyan,
                             selectedTextColor = PrimaryCyan,
@@ -447,20 +378,8 @@ fun MainAppScreen(
                     onAddToPlaylist = { playlistId, songId -> viewModel.addSongToPlaylist(playlistId, songId) }
                 )
 
-                3 -> YtSearchScreen(
-                    currentSong = currentSong,
-                    searchResults = ytSearchResults,
-                    isSearching = isYtSearching,
-                    downloadProgress = downloadProgress,
-                    downloadingTrackId = downloadingTrackId,
-                    onSearchSubmit = { query -> viewModel.searchYtTracks(query) },
-                    onStreamTrack = { item -> viewModel.streamYtTrack(item) },
-                    onDownloadTrack = { item -> viewModel.downloadYtTrack(item) }
-                )
-
-                4 -> SettingsScreen(
+                3 -> SettingsScreen(
                     totalTracksCount = songs.size,
-                    downloadedTracksCount = downloadedSongs.size,
                     isScanning = isScanning,
                     equalizerEngine = viewModel.equalizerEngine,
                     isHiFiSupported = hifiActive,
@@ -468,12 +387,9 @@ fun MainAppScreen(
                     isSampleRateMatching = isSampleRateMatching,
                     isAudioAuxEnabled = isAudioAuxEnabled,
                     hifiProfileManager = PlaybackService.instance?.hifiProfileManager,
-                    selectedAiProvider = selectedAiProvider,
-                    selectedAiModel = selectedAiModel,
                     audioSnapshot = audioSnapshot,
                     onScanLibrary = { viewModel.scanLibrary() },
                     onOpenEqualizer = { showEqualizerSheet = true },
-                    onOpenAiSettings = { showAiChatSheet = true },
                     onHiFiToggle = { viewModel.setHiFiAudioSinkEnabled(it) },
                     onBitPerfectToggle = { viewModel.setBitPerfectMode(it) },
                     onSampleRateMatchingToggle = { viewModel.setSampleRateMatching(it) },
@@ -509,24 +425,6 @@ fun MainAppScreen(
             onOpenLyrics = { showLyricsSheet = true },
             onOpenAudiophileInfo = { showAudiophileInfoSheet = true },
             isHiFiSupported = hifiActive
-        )
-    }
-
-    // AI Chatbot Sheet Modal
-    if (showAiChatSheet) {
-        AiChatSheet(
-            messages = chatMessages,
-            isProcessing = isAiProcessing,
-            isListening = isListeningVoice,
-            selectedProvider = selectedAiProvider,
-            selectedModel = selectedAiModel,
-            availableModelsMap = viewModel.aiKeyManager.availableModels,
-            onSendMessage = { viewModel.sendAiMessage(it) },
-            onStartVoiceInput = onRequestVoiceInput,
-            onSaveApiKey = { provider, key -> viewModel.saveAiApiKey(provider, key) },
-            onSelectProvider = { provider -> viewModel.selectAiProvider(provider) },
-            onSelectModel = { provider, model -> viewModel.selectAiModel(provider, model) },
-            onDismiss = { showAiChatSheet = false }
         )
     }
 

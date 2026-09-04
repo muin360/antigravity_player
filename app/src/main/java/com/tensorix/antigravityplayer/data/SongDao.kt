@@ -13,14 +13,11 @@ interface SongDao {
     @Query("SELECT * FROM songs ORDER BY title ASC")
     fun getAllSongs(): Flow<List<Song>>
 
-    @Query("SELECT * FROM songs WHERE source = 'local'")
+    @Query("SELECT * FROM songs ORDER BY title ASC")
     suspend fun getAllLocalSongsList(): List<Song>
 
     @Query("SELECT * FROM songs WHERE isFavorite = 1 ORDER BY title ASC")
     fun getFavoriteSongs(): Flow<List<Song>>
-
-    @Query("SELECT * FROM songs WHERE isDownloaded = 1 ORDER BY dateAdded DESC")
-    fun getDownloadedSongs(): Flow<List<Song>>
 
     @Query("SELECT * FROM songs WHERE title LIKE '%' || :query || '%' OR artist LIKE '%' || :query || '%' OR album LIKE '%' || :query || '%' ORDER BY title ASC")
     fun searchSongs(query: String): Flow<List<Song>>
@@ -30,9 +27,6 @@ interface SongDao {
 
     @Query("SELECT * FROM songs WHERE id = :id")
     suspend fun getSongById(id: Long): Song?
-
-    @Query("SELECT * FROM songs WHERE youtubeId = :ytId LIMIT 1")
-    suspend fun getSongByYoutubeId(ytId: String): Song?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSongs(songs: List<Song>)
@@ -49,6 +43,6 @@ interface SongDao {
     @Delete
     suspend fun deleteSong(song: Song)
 
-    @Query("DELETE FROM songs WHERE source = 'local' AND lastScanned < :scanTimestamp")
+    @Query("DELETE FROM songs WHERE lastScanned < :scanTimestamp")
     suspend fun deleteStaleLocalSongs(scanTimestamp: Long)
 }

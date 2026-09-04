@@ -12,7 +12,6 @@ class MusicRepository(private val context: Context) {
 
     val allSongs: Flow<List<Song>> = songDao.getAllSongs()
     val favoriteSongs: Flow<List<Song>> = songDao.getFavoriteSongs()
-    val downloadedSongs: Flow<List<Song>> = songDao.getDownloadedSongs()
     val allPlaylists: Flow<List<Playlist>> = playlistDao.getAllPlaylists()
     val playlistsWithSongs: Flow<List<PlaylistWithSongs>> = playlistDao.getPlaylistsWithSongs()
 
@@ -28,17 +27,6 @@ class MusicRepository(private val context: Context) {
         if (songId > 0) {
             songDao.updateFavoriteStatus(songId, isFav)
         }
-    }
-
-    suspend fun saveDownloadedSong(song: Song): Long {
-        // Check for duplicate by youtubeId before inserting
-        val existing = song.youtubeId?.let { songDao.getSongByYoutubeId(it) }
-        if (existing != null) return existing.id
-        return songDao.insertSong(song)
-    }
-
-    suspend fun getSongByYoutubeId(ytId: String): Song? {
-        return songDao.getSongByYoutubeId(ytId)
     }
 
     suspend fun createPlaylist(name: String): Long {

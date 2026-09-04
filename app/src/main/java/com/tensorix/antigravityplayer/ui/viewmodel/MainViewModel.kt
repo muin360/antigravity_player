@@ -5,32 +5,20 @@ import android.content.Context
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.tensorix.antigravityplayer.ai.AgentAction
-import com.tensorix.antigravityplayer.ai.AiKeyManager
-import com.tensorix.antigravityplayer.ai.AiOutcome
-import com.tensorix.antigravityplayer.ai.AiProvider
-import com.tensorix.antigravityplayer.ai.MusicAiAgent
+import com.tensorix.antigravityplayer.audio.AudioOutputManager
+import com.tensorix.antigravityplayer.audio.AudiophilePlaybackSnapshot
+import com.tensorix.antigravityplayer.audio.AudioTrackInfo
 import com.tensorix.antigravityplayer.data.MusicRepository
 import com.tensorix.antigravityplayer.data.Playlist
 import com.tensorix.antigravityplayer.data.PlaylistWithSongs
 import com.tensorix.antigravityplayer.data.Song
-import com.tensorix.antigravityplayer.data.remote.YtApiService
-import com.tensorix.antigravityplayer.data.remote.YtResult
-import com.tensorix.antigravityplayer.data.remote.YtSearchResultItem
-import com.tensorix.antigravityplayer.data.remote.YtStreamResponse
-import com.tensorix.antigravityplayer.audio.AudioOutputManager
-import com.tensorix.antigravityplayer.audio.AudiophilePlaybackSnapshot
-import com.tensorix.antigravityplayer.audio.AudioTrackInfo
 import com.tensorix.antigravityplayer.player.EqualizerEngine
 import com.tensorix.antigravityplayer.player.MusicController
 import com.tensorix.antigravityplayer.player.PlaybackService
-import com.tensorix.antigravityplayer.ui.components.ChatMessage
 import com.tensorix.antigravityplayer.util.LrcLine
 import com.tensorix.antigravityplayer.util.LrcParser
-import com.tensorix.antigravityplayer.voice.VoiceAssistantManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,11 +26,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 @androidx.media3.common.util.UnstableApi
@@ -54,21 +42,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MusicRepository(application)
     private val musicController by lazy { MusicController(application) }
     private val audioManager = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-    // AI & Voice Engine
-    val aiKeyManager = AiKeyManager(application)
-    private val musicAiAgent = MusicAiAgent(aiKeyManager)
-    val voiceAssistantManager = VoiceAssistantManager(application)
-
-    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
-
-    private val _isAiProcessing = MutableStateFlow(false)
-    val isAiProcessing: StateFlow<Boolean> = _isAiProcessing.asStateFlow()
-
-    val isListeningVoice = voiceAssistantManager.isListening
-    val selectedAiProvider = aiKeyManager.selectedProvider
-    val selectedAiModel = aiKeyManager.selectedModel
 
     // Lyrics State
     private val _lyricsLines = MutableStateFlow<List<LrcLine>>(emptyList())
@@ -104,15 +77,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sleepTimerRemainingMs = MutableStateFlow(0L)
     val sleepTimerRemainingMs: StateFlow<Long> = _sleepTimerRemainingMs.asStateFlow()
 
-    // Download tracking
-    private val _downloadProgress = MutableStateFlow(-1)
-    val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
-
-    private val _downloadingTrackId = MutableStateFlow<String?>(null)
-    val downloadingTrackId: StateFlow<String?> = _downloadingTrackId.asStateFlow()
-
     /**
-     * P0 duplicate-ownership fix: the SERVICE owns the listening AudioOutputManager.
+     * The SERVICE owns the listening AudioOutputManager.
      * The UI falls back to a poll-only instance (no system listeners) before the
      * service exists, so route events can never trigger double reconfigurations.
      */
@@ -165,12 +131,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
-    val downloadedSongs: StateFlow<List<Song>> = repository.downloadedSongs.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
-
     @OptIn(ExperimentalCoroutinesApi::class)
     val songs: StateFlow<List<Song>> = combine(
         _searchQuery.flatMapLatest { query ->
@@ -198,7 +158,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isPlaying get() = musicController.isPlaying
     val currentPositionMs get() = musicController.currentPositionMs
 
-    /** Flow handle for subtree-scoped collection (Phase 22 perf fix). */
     val currentPositionState: StateFlow<Long> get() = musicController.currentPositionMs
     val durationMs get() = musicController.durationMs
     val shuffleEnabled get() = musicController.shuffleEnabled
@@ -208,12 +167,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val equalizerEngine: EqualizerEngine?
         get() = PlaybackService.instance?.equalizerEngine
 
-    private val ytApiService = YtApiService(application)
-    private val _ytSearchResults = MutableStateFlow<List<YtSearchResultItem>>(emptyList())
-    val ytSearchResults: StateFlow<List<YtSearchResultItem>> = _ytSearchResults.asStateFlow()
-
-    private val _isYtSearching = MutableStateFlow(false)
-    val isYtSearching: StateFlow<Boolean> = _isYtSearching.asStateFlow()
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            refreshAudioSnapshot()
+        }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            refreshAudioSnapshot()
+        }
+    }
 
     init {
         refreshHiFiSupport()
@@ -238,8 +199,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
-            // Lyrics wiring (was dead: nothing ever populated lyricsLines).
-            // Loads a sibling "<track>.lrc" next to the audio file when present.
             currentSong.collectLatest { song ->
                 val lines = if (song == null || song.filePath.isBlank()) emptyList()
                 else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -248,34 +207,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _lyricsLines.value = lines
             }
         }
-        viewModelScope.launch {
-            // Re-subscribes whenever the service instance swaps so UI always
-            // mirrors the OWNING manager's route state.
-            PlaybackService.instanceFlow.collectLatest { service ->
-                val manager = service?.audioOutputManager ?: fallbackOutputManager
-                manager.outputState.collectLatest {
-                    refreshAudioSnapshot()
-                }
-            }
-        }
-        runCatching {
-            audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
-        }
+
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
     }
 
-    private val audioDeviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-            refreshHiFiSupport()
-            refreshAudioSnapshot()
-        }
-
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-            refreshHiFiSupport()
-            refreshAudioSnapshot()
-        }
-    }
-
-    private fun refreshHiFiSupport() {
+    fun refreshHiFiSupport() {
         _hiFiSupported.value = PlaybackService.isHiFiSupported()
     }
 
@@ -320,7 +256,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBitPerfectMode(enabled: Boolean) {
-        _isBitPerfectMode.value = enabled
         PlaybackService.instance?.setBitPerfectMode(enabled)
         refreshAudioSnapshot()
     }
@@ -338,131 +273,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setAudioAuxEnabled(enabled: Boolean) {
         PlaybackService.instance?.setAudioAuxEnabled(enabled)
         refreshAudioSnapshot()
-    }
-
-    fun sendAiMessage(prompt: String) {
-        if (prompt.isBlank()) return
-        val currentMsgs = _chatMessages.value.toMutableList()
-        currentMsgs.add(ChatMessage("USER", prompt))
-        _chatMessages.value = currentMsgs
-
-        viewModelScope.launch {
-            _isAiProcessing.value = true
-            try {
-                when (val outcome = musicAiAgent.processUserPrompt(prompt)) {
-                    is AiOutcome.Success -> executeAgentAction(outcome.action)
-                    is AiOutcome.Failure -> addAiReply("⚠ ${outcome.userMessage}")
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                addAiReply("⚠ Unexpected error while processing your request.")
-            } finally {
-                _isAiProcessing.value = false
-            }
-        }
-    }
-
-    fun startVoiceInput() {
-        voiceAssistantManager.startListening { spokenText ->
-            sendAiMessage(spokenText)
-        }
-    }
-
-    fun onMicPermissionDenied() {
-        addAiReply("Microphone permission was not granted. Voice input requires microphone access.")
-    }
-
-    fun saveAiApiKey(provider: AiProvider, key: String) {
-        aiKeyManager.setApiKey(provider, key)
-    }
-
-    fun selectAiProvider(provider: AiProvider) {
-        aiKeyManager.setSelectedProvider(provider)
-    }
-
-    fun selectAiModel(provider: AiProvider, model: String) {
-        aiKeyManager.setSelectedModel(provider, model)
-    }
-
-    private fun executeAgentAction(action: AgentAction) {
-        when (action) {
-            is AgentAction.PlaySong -> {
-                val match = songs.value.find {
-                    it.title.contains(action.query, ignoreCase = true) || it.artist.contains(action.query, ignoreCase = true)
-                }
-                if (match != null) {
-                    playSong(match, songs.value)
-                    addAiReply("▶ Playing '${match.title}' by ${match.artist}.")
-                } else {
-                    searchYtTracks(action.query)
-                    addAiReply("🔍 Song not found locally. Searching YouTube for '${action.query}'...")
-                }
-            }
-            is AgentAction.PlayMood -> {
-                val moodSongs = songs.value.filter {
-                    it.title.contains(action.mood, ignoreCase = true) ||
-                            it.artist.contains(action.mood, ignoreCase = true) ||
-                            it.album.contains(action.mood, ignoreCase = true)
-                }.ifEmpty { songs.value.shuffled() }
-
-                playAll(moodSongs, shuffle = true)
-                addAiReply("🎨 Launched ${action.mood.uppercase()} mood playlist (${moodSongs.size} tracks)!")
-            }
-            is AgentAction.SearchYoutube -> {
-                searchYtTracks(action.query)
-                addAiReply("🔍 Searching YouTube for '${action.query}'...")
-            }
-            is AgentAction.DownloadYoutube -> {
-                addAiReply("⬇ Searching & downloading '${action.query}' from YouTube...")
-                viewModelScope.launch {
-                    try {
-                        when (val result = ytApiService.searchTracks(action.query)) {
-                            is YtResult.Success -> {
-                                if (result.value.isNotEmpty()) {
-                                    _ytSearchResults.value = result.value
-                                    downloadYtTrack(result.value.first())
-                                } else {
-                                    addAiReply("❌ No results found for '${action.query}' on YouTube.")
-                                }
-                            }
-                            is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    }
-                }
-            }
-            is AgentAction.SetEqualizerPreset -> {
-                equalizerEngine?.builtInPresets?.find { it.name.equals(action.presetName, ignoreCase = true) }?.let {
-                    equalizerEngine?.applyPreset(it)
-                    addAiReply("🎛 Applied '${it.name}' Equalizer Preset!")
-                } ?: addAiReply("❓ EQ preset '${action.presetName}' not found.")
-            }
-            is AgentAction.SetSleepTimer -> {
-                setSleepTimer(action.minutes)
-                addAiReply("⏲ Sleep timer set for ${action.minutes} minutes.")
-            }
-            is AgentAction.PlaybackControl -> {
-                when (action.command) {
-                    "pause", "stop" -> if (isPlaying.value) togglePlayPause()
-                    "play", "resume" -> if (!isPlaying.value) togglePlayPause()
-                    "next", "skip" -> skipToNext()
-                    "previous", "prev", "back" -> skipToPrevious()
-                    "shuffle" -> toggleShuffle()
-                }
-                addAiReply("⏯ Executed: ${action.command.uppercase()}")
-            }
-            is AgentAction.ChatReply -> {
-                addAiReply(action.message)
-            }
-        }
-    }
-
-    private fun addAiReply(text: String) {
-        val currentMsgs = _chatMessages.value.toMutableList()
-        currentMsgs.add(ChatMessage("AI", text))
-        _chatMessages.value = currentMsgs
     }
 
     fun scanLibrary() {
@@ -548,125 +358,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshAudioSnapshot()
     }
 
-    fun searchYtTracks(query: String) {
-        viewModelScope.launch {
-            _isYtSearching.value = true
-            try {
-                when (val result = ytApiService.searchTracks(query)) {
-                    is YtResult.Success -> _ytSearchResults.value = result.value
-                    is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } finally {
-                _isYtSearching.value = false
-            }
-        }
-    }
-
-    fun streamYtTrack(item: YtSearchResultItem) {
-        viewModelScope.launch {
-            try {
-                when (val result = ytApiService.getStreamUrl(item.id)) {
-                    is YtResult.Success -> {
-                        val response = result.value
-                        if (response.streamUrl.isBlank()) return@launch
-                        val onlineSong = Song(
-                            title = response.title,
-                            artist = response.artist,
-                            album = "YouTube Stream",
-                            durationMs = response.durationSeconds * 1000,
-                            filePath = response.streamUrl,
-                            albumArtUri = response.thumbnailUrl,
-                            source = "youtube",
-                            youtubeId = response.id,
-                            format = "AAC",
-                            bitrate = 128
-                        )
-                        musicController.playSong(onlineSong, listOf(onlineSong))
-                    }
-                    is YtResult.Failure -> addAiReply("⚠ ${result.userMessage}")
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            }
-        }
-    }
-
-    fun downloadYtTrack(item: YtSearchResultItem) {
-        viewModelScope.launch {
-            try {
-                // Check duplicate
-                val existing = repository.getSongByYoutubeId(item.id)
-                if (existing != null) {
-                    addAiReply("✅ '${item.title}' is already downloaded!")
-                    playSong(existing)
-                    return@launch
-                }
-
-                _downloadingTrackId.value = item.id
-                _downloadProgress.value = 0
-
-                val streamResult = ytApiService.getStreamUrl(item.id)
-                val response: YtStreamResponse
-                when (streamResult) {
-                    is YtResult.Success -> {
-                        if (streamResult.value.streamUrl.isBlank()) {
-                            addAiReply("❌ Could not get stream URL for '${item.title}'.")
-                            _downloadingTrackId.value = null
-                            _downloadProgress.value = -1
-                            return@launch
-                        }
-                        response = streamResult.value
-                    }
-                    is YtResult.Failure -> {
-                        addAiReply("⚠ ${streamResult.userMessage}")
-                        _downloadingTrackId.value = null
-                        _downloadProgress.value = -1
-                        return@launch
-                    }
-                }
-
-                when (val dl = ytApiService.downloadTrackToDevice(
-                    context = getApplication(),
-                    streamResponse = response,
-                    onProgress = { progress ->
-                        _downloadProgress.value = progress
-                    }
-                )) {
-                    is YtResult.Success -> {
-                        val localPath = dl.value
-                        val downloadedSong = Song(
-                            title = response.title,
-                            artist = response.artist,
-                            album = "YouTube Downloads",
-                            durationMs = response.durationSeconds * 1000,
-                            filePath = localPath,
-                            albumArtUri = response.thumbnailUrl,
-                            source = "youtube",
-                            youtubeId = response.id,
-                            isDownloaded = true,
-                            format = "M4A",
-                            bitrate = 128
-                        )
-                        repository.saveDownloadedSong(downloadedSong)
-                        addAiReply("✅ Downloaded '${response.title}' successfully! Saved to Music/AntigravityPlayer/")
-                        Toast.makeText(getApplication(), "Downloaded: ${response.title}", Toast.LENGTH_SHORT).show()
-                    }
-                    is YtResult.Failure -> {
-                        addAiReply("⚠ ${dl.userMessage}")
-                        _downloadProgress.value = -1
-                    }
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } finally {
-                _downloadingTrackId.value = null
-                _downloadProgress.value = -1
-            }
-        }
-    }
-
     fun createPlaylist(name: String) {
         viewModelScope.launch {
             if (name.isNotBlank()) {
@@ -699,7 +390,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         }
-        voiceAssistantManager.release()
         musicController.release()
         audioOutputManager.release()
     }

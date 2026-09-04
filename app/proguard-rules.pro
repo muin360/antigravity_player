@@ -59,9 +59,15 @@
 -dontwarn androidx.room.paging.**
 
 # -------------------------------------------------------------------------
-# Retrofit / OkHttp / Serialization
+
 # -------------------------------------------------------------------------
--dontwarn okhttp3.**
--dontwarn okio.**
--keepattributes Signature, InnerClasses, EnclosingMethod
--keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
+# Production Log Stripping — Remove debug/verbose/info logs from release APK.
+# Only Log.w() and Log.e() are preserved for production error tracking.
+# This prevents leaking audio session IDs, route types, DAC probes,
+# seek timing, Oboe stream handles, and other diagnostic internals.
+# -------------------------------------------------------------------------
+-assumenosideeffects class android.util.Log {
+    public static int d(...);
+    public static int v(...);
+    public static int i(...);
+}

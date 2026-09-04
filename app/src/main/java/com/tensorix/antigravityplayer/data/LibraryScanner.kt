@@ -156,7 +156,6 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                     durationMs = duration,
                     filePath = playUri,
                     albumArtUri = albumArtUri,
-                    source = "local",
                     isFavorite = isFav,
                     dateAdded = if (dateAddedMs > 0) dateAddedMs else existing?.dateAdded ?: System.currentTimeMillis(),
                     lastScanned = scanStartTimestamp,

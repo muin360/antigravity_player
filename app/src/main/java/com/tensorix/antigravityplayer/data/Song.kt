@@ -5,20 +5,17 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * Core Song entity for Room DB — Hi-Fi/Hi-Res metadata support
+ * Core Song entity for Room DB — Hi-Fi/Hi-Res offline audio metadata
  */
 @Entity(
     tableName = "songs",
     indices = [
         Index(value = ["filePath"], unique = true),
-        Index(value = ["youtubeId"]),
         Index(value = ["title"]),
         Index(value = ["artist"]),
         Index(value = ["album"]),
         Index(value = ["isFavorite"]),
-        Index(value = ["lastScanned"]),
-        Index(value = ["source"]),
-        Index(value = ["isDownloaded"])
+        Index(value = ["lastScanned"])
     ]
 )
 data class Song(
@@ -33,12 +30,9 @@ data class Song(
     val dateAdded: Long = System.currentTimeMillis(),
     val isFavorite: Boolean = false,
     val lastScanned: Long = System.currentTimeMillis(),
-    val source: String = "local", // "local" or "youtube"
-    val youtubeId: String? = null,
     // Hi-Res audio metadata
     val bitrate: Int = 0,           // kbps (e.g. 320, 1411)
     val sampleRate: Int = 0,        // Hz (e.g. 44100, 96000, 192000)
     val format: String? = null,     // "FLAC", "MP3", "AAC", "WAV", "ALAC", "OGG"
-    val fileSize: Long = 0L,        // bytes
-    val isDownloaded: Boolean = false // true for saved YouTube downloads
+    val fileSize: Long = 0L         // bytes
 )

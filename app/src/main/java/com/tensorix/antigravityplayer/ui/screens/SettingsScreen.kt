@@ -23,7 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
-import com.tensorix.antigravityplayer.ai.AiProvider
 import com.tensorix.antigravityplayer.audio.AudiophilePlaybackSnapshot
 import com.tensorix.antigravityplayer.audio.BitPerfectState
 import com.tensorix.antigravityplayer.audio.HiFiProfileManager
@@ -39,7 +38,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(
     totalTracksCount: Int,
-    downloadedTracksCount: Int,
     isScanning: Boolean,
     equalizerEngine: EqualizerEngine?,
     isHiFiSupported: Boolean,
@@ -47,12 +45,9 @@ fun SettingsScreen(
     isSampleRateMatching: Boolean,
     isAudioAuxEnabled: Boolean,
     hifiProfileManager: HiFiProfileManager?,
-    selectedAiProvider: AiProvider,
-    selectedAiModel: String,
     audioSnapshot: AudiophilePlaybackSnapshot,
     onScanLibrary: () -> Unit,
     onOpenEqualizer: () -> Unit,
-    onOpenAiSettings: () -> Unit,
     onHiFiToggle: (Boolean) -> Unit,
     onBitPerfectToggle: (Boolean) -> Unit = {},
     onSampleRateMatchingToggle: (Boolean) -> Unit = {},
@@ -60,21 +55,8 @@ fun SettingsScreen(
     onRefreshAudioSnapshot: () -> Unit,
     onForceReload: () -> Unit = {}
 ) {
-    // Audit check for parameters
-    LaunchedEffect(totalTracksCount, isScanning, selectedAiProvider, selectedAiModel, onScanLibrary, onOpenAiSettings, onOpenEqualizer) {
-        android.util.Log.d("SettingsScreen", "Audit: Tracks=$totalTracksCount, Scanning=$isScanning")
-    }
-
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("yt_config", Context.MODE_PRIVATE) }
-
-    var serverUrl by remember {
-        mutableStateOf(
-            prefs.getString("server_url", null)
-                ?: com.tensorix.antigravityplayer.BuildConfig.DEV_YT_BASE_URL
-        )
-    }
     
     val hiFiEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.hiFiEnabled, true)
     val isTurboMode by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.sampleRateMatching, true)
@@ -154,7 +136,7 @@ fun SettingsScreen(
                     color = TextPrimary
                 )
                 Text(
-                    text = "Configure Hi-Fi Audio, YouTube Backend & AI Engine",
+                    text = "Audiophile Audio Engine & Local Library Settings",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -471,75 +453,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(30.dp))
 
-        // SECTION 2: YOUTUBE BACKEND SERVER CONFIG
-        Text(
-            text = "YOUTUBE BACKEND CONFIGURATION",
-            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold),
-            color = PrimaryCyan
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Cloud, contentDescription = null, tint = PrimaryCyan)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("Backend Server Endpoint", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("Host URL for YouTube search \u0026 stream extraction", color = TextSecondary, fontSize = 11.sp)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { 
-                        serverUrl = it
-                        prefs.edit().putString("server_url", it).apply()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Server URL", color = TextSecondary, fontSize = 12.sp) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = PrimaryCyan,
-                        unfocusedBorderColor = SurfaceDark,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Quick Presets (endpoints come from build config so dev and
-                // release builds can never ship each other's defaults)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val presets = listOf(
-                        com.tensorix.antigravityplayer.BuildConfig.DEV_YT_BASE_URL to "Emulator",
-                        com.tensorix.antigravityplayer.BuildConfig.PROD_YT_BASE_URL to "Production"
-                    )
-                    presets.forEach { (url, label) ->
-                        AssistChip(
-                            onClick = {
-                                serverUrl = url
-                                prefs.edit().putString("server_url", url).apply()
-                            },
-                            label = { Text(label, fontSize = 10.sp) },
-                            colors = AssistChipDefaults.assistChipColors(labelColor = TextPrimary, containerColor = SurfaceDark),
-                            border = null
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(30.dp))
-
-        // SECTION 3: LIBRARY MANAGEMENT
+        // SECTION 2: LIBRARY MANAGEMENT
         Text(
             text = "LIBRARY MANAGEMENT",
             style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold),
@@ -572,49 +486,6 @@ fun SettingsScreen(
                         else Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = PrimaryCyan)
                     }
                 }
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = Color.White.copy(alpha = 0.05f))
-
-                // Stats
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Downloaded Tracks", color = TextSecondary, fontSize = 12.sp)
-                    Text(downloadedTracksCount.toString(), color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(30.dp))
-
-        // SECTION 4: AI ASSISTANT CONFIG
-        Text(
-            text = "AI ENGINE CONFIGURATION",
-            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold),
-            color = PrimaryCyan
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Card(
-            onClick = onOpenAiSettings,
-            colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.5f)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = PrimaryCyan)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text("AI Provider \u0026 Model", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("${selectedAiProvider.name} \u2794 $selectedAiModel", color = TextSecondary, fontSize = 11.sp)
-                    }
-                }
-                Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = TextSecondary)
             }
         }
 

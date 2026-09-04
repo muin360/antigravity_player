@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App branding -->
+    <string name="app_name">Antigravity Player</string>
+
+    <!-- Bottom navigation tabs -->
+    <string name="tab_tracks">Tracks</string>
+    <string name="tab_playlists">Playlists</string>
+    <string name="tab_favorites">Favorites</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Player controls -->
+    <string name="action_play">Play</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_skip_next">Next track</string>
+    <string name="action_skip_previous">Previous track</string>
+    <string name="action_shuffle">Shuffle</string>
+    <string name="action_repeat">Repeat</string>
+    <string name="action_seek">Seek</string>
+
+    <!-- Library -->
+    <string name="library_scanning">Scanning library…</string>
+    <string name="library_empty">No tracks found. Grant storage access to scan your music.</string>
+    <string name="library_total_tracks">%d tracks</string>
+    <string name="action_scan_library">Scan Library</string>
+    <string name="action_sort">Sort</string>
+    <string name="sort_title">By Title</string>
+    <string name="sort_artist">By Artist</string>
+    <string name="sort_duration">By Duration</string>
+    <string name="sort_date_added">By Date Added</string>
+
+    <!-- Playlists -->
+    <string name="playlist_create">Create Playlist</string>
+    <string name="playlist_name_hint">Playlist name</string>
+    <string name="playlist_delete_confirm">Delete this playlist?</string>
+    <string name="playlist_empty">No playlists yet</string>
+    <string name="action_add_to_playlist">Add to Playlist</string>
+
+    <!-- Favorites -->
+    <string name="favorites_empty">No favorite tracks yet</string>
+    <string name="action_toggle_favorite">Toggle Favorite</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_audio_engine">Audio Engine</string>
+    <string name="settings_hi_fi">Hi-Fi Mode</string>
+    <string name="settings_bit_perfect">Bit-Perfect Mode</string>
+    <string name="settings_sample_rate_matching">Sample Rate Matching</string>
+    <string name="settings_equalizer">Equalizer</string>
+    <string name="settings_about">About</string>
+    <string name="settings_version">Version %s</string>
+    <string name="settings_force_reload">Force Audio Reload</string>
+
+    <!-- Audiophile Info -->
+    <string name="audiophile_signal_path">Signal Path</string>
+    <string name="audiophile_dac_info">DAC Information</string>
+    <string name="audiophile_bit_perfect">Bit-Perfect Status</string>
+    <string name="audiophile_listening_mode">Listening Mode</string>
+    <string name="audiophile_dsp_plugins">DSP Plugins</string>
+    <string name="audiophile_hi_res_badge">HI-RES</string>
+
+    <!-- Equalizer -->
+    <string name="eq_title">Equalizer</string>
+    <string name="eq_preamp">Pre-Amp</string>
+    <string name="eq_bass_boost">Bass Boost</string>
+    <string name="eq_virtualizer">3D Surround</string>
+    <string name="eq_preset">Preset</string>
+    <string name="eq_auto_eq">AutoEQ</string>
+    <string name="eq_hrtf">HRTF Spatial</string>
+    <string name="eq_crossfeed">Crossfeed</string>
+
+    <!-- Lyrics -->
+    <string name="lyrics_title">Lyrics</string>
+    <string name="lyrics_not_found">No lyrics found for this track</string>
+
+    <!-- Permissions -->
+    <string name="permission_storage_title">Storage Access Required</string>
+    <string name="permission_storage_description">Antigravity Player needs access to your music files to build your library.</string>
+    <string name="permission_grant">Grant Permission</string>
+
+    <!-- Sleep Timer -->
+    <string name="sleep_timer_title">Sleep Timer</string>
+    <string name="sleep_timer_off">Off</string>
+    <string name="sleep_timer_minutes">%d minutes</string>
+
+    <!-- Song Info -->
+    <string name="song_info_title">Track Info</string>
+    <string name="song_info_format">Format</string>
+    <string name="song_info_bitrate">Bitrate</string>
+    <string name="song_info_sample_rate">Sample Rate</string>
+    <string name="song_info_file_size">File Size</string>
+    <string name="song_info_duration">Duration</string>
+
+    <!-- Queue -->
+    <string name="queue_title">Now Playing Queue</string>
+    <string name="queue_empty">Queue is empty</string>
+
+    <!-- Common actions -->
+    <string name="action_cancel">Cancel</string>
+    <string name="action_ok">OK</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_save">Save</string>
+    <string name="action_close">Close</string>
+    <string name="action_retry">Retry</string>
+
+    <!-- Content descriptions for accessibility -->
+    <string name="cd_album_art">Album artwork</string>
+    <string name="cd_play_pause">Play or pause</string>
+    <string name="cd_skip_next">Skip to next track</string>
+    <string name="cd_skip_previous">Skip to previous track</string>
+    <string name="cd_open_equalizer">Open equalizer</string>
+    <string name="cd_open_queue">Open playback queue</string>
+    <string name="cd_open_lyrics">Open lyrics</string>
+    <string name="cd_favorite">Toggle favorite</string>
+    <string name="cd_volume_slider">Volume slider</string>
+    <string name="cd_seek_bar">Playback seek bar</string>
+</resources>

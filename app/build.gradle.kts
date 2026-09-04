@@ -13,12 +13,28 @@ android {
     namespace = "com.tensorix.antigravityplayer"
     compileSdk = 34
 
+    // Release signing credentials are loaded from ~/.gradle/gradle.properties
+    // to keep secrets out of VCS. Required keys:
+    //   ANTIGRAVITY_RELEASE_STORE_FILE=/path/to/release.keystore
+    //   ANTIGRAVITY_RELEASE_STORE_PASSWORD=...
+    //   ANTIGRAVITY_RELEASE_KEY_ALIAS=...
+    //   ANTIGRAVITY_RELEASE_KEY_PASSWORD=...
+    signingConfigs {
+        create("release") {
+            val props = project.properties
+            storeFile = file(props["ANTIGRAVITY_RELEASE_STORE_FILE"] as? String ?: "release.keystore")
+            storePassword = props["ANTIGRAVITY_RELEASE_STORE_PASSWORD"] as? String ?: ""
+            keyAlias = props["ANTIGRAVITY_RELEASE_KEY_ALIAS"] as? String ?: ""
+            keyPassword = props["ANTIGRAVITY_RELEASE_KEY_PASSWORD"] as? String ?: ""
+        }
+    }
+
     defaultConfig {
         applicationId = "com.tensorix.antigravityplayer"
         minSdk = 27
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.1.0-forensic-hardening"
+        versionCode = 4
+        versionName = "2.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
@@ -34,11 +50,6 @@ android {
             }
         }
 
-        // YouTube extraction backend endpoints. Development defaults to the
-        // local emulator loopback; production MUST be an https:// host
-        // (enforced at runtime in YtApiService for release builds).
-        buildConfigField("String", "DEV_YT_BASE_URL", "\"http://10.0.2.2:3000\"")
-        buildConfigField("String", "PROD_YT_BASE_URL", "\"https://yt-backend.tensorix.com\"")
     }
 
     externalNativeBuild {
@@ -59,6 +70,12 @@ android {
     }
     buildTypes {
         release {
+            val releaseKeystore = signingConfigs.getByName("release").storeFile
+            if (releaseKeystore?.exists() == true) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -85,7 +102,8 @@ android {
 dependencies {
     // Core / Compose
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
+    implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.ui:ui:1.6.8")
     implementation("androidx.compose.ui:ui-graphics:1.6.8")
     implementation("androidx.compose.ui:ui-tooling-preview:1.6.8")
@@ -111,17 +129,13 @@ dependencies {
     // External high-performance decoder support via MediaCodec hardening
     // Phase 15: High-Precision 64-bit Audio DSP Architecture Enhancement
 
-    // Room DB -> Phase 1 (library) & Phase 3 (YT cache).
+    // Room DB -> Phase 1 (library)
     // Schema JSONs are exported to app/schemas for versioned migration tests.
     implementation("androidx.room:room-runtime:2.7.0-alpha13")
     implementation("androidx.room:room-ktx:2.7.0-alpha13")
     ksp("androidx.room:room-compiler:2.7.0-alpha13")
 
-    // Networking -> LLM APIs (OkHttp only; Retrofit/Gson were unused and removed)
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Security -> Phase 4 (encrypted BYOK key storage)
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
