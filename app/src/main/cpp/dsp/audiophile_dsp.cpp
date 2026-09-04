@@ -430,6 +430,12 @@ void AudiophileDsp::resetRenderStateOnly() {
     phaseCorrelation_.store(1.0f, std::memory_order_relaxed);
 }
 
+void AudiophileDsp::reset() {
+    Command cmd;
+    cmd.kind = Command::Kind::kResetState;
+    enqueueCommand(cmd);
+}
+
 double AudiophileDsp::nextRandomDouble() {
     // 64-bit xorshift*
     rngState_ ^= rngState_ >> 12;

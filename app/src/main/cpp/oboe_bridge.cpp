@@ -99,7 +99,7 @@ public:
     //   atomicFramesWritten   : frames accepted by the hardware stream
     //   stagedPendingFrames() : frames in ring not yet handed to hardware
     // -------------------------------------------------------------------
-    static constexpr size_t kRingCapacitySamples = 1u << 16;   // 256 KB floats (power of two)
+    static constexpr size_t kRingCapacitySamples = 1u << 18;   // 1 MB floats (power of two: 262144 samples)
     static constexpr size_t kWriteScratchFrames = 4096;
     static constexpr size_t kRingMask = kRingCapacitySamples - 1;
 
@@ -188,10 +188,12 @@ public:
     std::mutex lifecycleMutex;
 
     std::atomic<bool> isActive{true};
+    std::atomic<bool> isWriting_{false};
     std::atomic<int64_t> atomicFramesWritten{0};
     std::atomic<int64_t> atomicTimestampUs{0};
     std::atomic<int64_t> atomicPositionFrames{0};
     std::atomic<int32_t> consecutiveTimeouts{0};
+    std::atomic<int64_t> hardwareFramesBaseline_{0};
 
     // Position query throttle state (guarded reads are cheap atomics).
     std::atomic<int64_t> lastQueryNs{0};
@@ -217,11 +219,14 @@ public:
             stream = nullptr;
         }
         clearPending_.store(true, std::memory_order_release);
+        hardwareFramesBaseline_.store(0, std::memory_order_relaxed);
         atomicFramesWritten.store(0, std::memory_order_relaxed);
         outputFramesProduced_.store(0, std::memory_order_relaxed);
         atomicTimestampUs.store(0, std::memory_order_relaxed);
         atomicPositionFrames.store(0, std::memory_order_relaxed);
         consecutiveTimeouts.store(0, std::memory_order_relaxed);
+        resampler.reset();
+        dsp.reset();
     }
 
     void flush() {
@@ -244,6 +249,18 @@ public:
                 } else {
                     LOGW("flush: skipped native flush due to stream state %s", oboe::convertToText(state));
                 }
+
+                // Query baseline hardware frame position at flush time (Rule 14)
+                int64_t baseFrames = stream->getFramesRead();
+                if (baseFrames <= 0) {
+                    int64_t fp = 0, tns = 0;
+                    if (stream->getTimestamp(CLOCK_MONOTONIC, &fp, &tns) == oboe::Result::OK && fp > 0) {
+                        baseFrames = fp;
+                    }
+                }
+                hardwareFramesBaseline_.store(std::max<int64_t>(0, baseFrames), std::memory_order_release);
+            } else {
+                hardwareFramesBaseline_.store(0, std::memory_order_release);
             }
         }
         atomicFramesWritten.store(0, std::memory_order_release);
@@ -257,6 +274,7 @@ public:
         // (P0-6.3: no pre-seek audio may survive a flush).
         clearPending_.store(true, std::memory_order_release);
         resampler.reset();          // deferred internally to the render thread
+        dsp.reset();                // clear biquad delay lines and ITD buffers (Rule 15)
     }
 
     void pause() {
@@ -330,6 +348,11 @@ public:
             const int32_t bufferSize = s->getBufferSizeInFrames();
             pos = atomicFramesWritten.load(std::memory_order_relaxed) -
                   static_cast<int64_t>(bufferSize);
+        }
+
+        const int64_t base = hardwareFramesBaseline_.load(std::memory_order_relaxed);
+        if (pos >= base && base > 0) {
+            pos -= base;
         }
 
         pos = std::max<int64_t>(0, std::min<int64_t>(
@@ -556,6 +579,16 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         return kErrStaleOrWrite;
     }
 
+    // Rule 5: Enforce single-writer model per stream
+    bool expectedWriter = false;
+    if (!wrapper->isWriting_.compare_exchange_strong(expectedWriter, true, std::memory_order_acq_rel)) {
+        return 0; // concurrent write detected; caller will retry
+    }
+    struct WriterGuard {
+        std::atomic<bool> &flag;
+        ~WriterGuard() { flag.store(false, std::memory_order_release); }
+    } writerGuard{wrapper->isWriting_};
+
     // Bounds validation against the real direct-buffer capacity.
     const jlong capacity = env->GetDirectBufferCapacity(directBuffer);
     if (capacity <= 0) {
@@ -640,6 +673,9 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     }
 
     const bool bypassDsp = (isBitPerfect == JNI_TRUE);
+
+    // Rule 15: Discard pre-seek staging before processing new audio
+    wrapper->applyClearIfRequested();
 
     if (wrapper->resampler.isPassThrough()) {
         // ---- Pass-through path: exact partial-write semantics ----
@@ -743,6 +779,16 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
     if (!wrapper || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
+
+    // Rule 5: Enforce single-writer model per stream
+    bool expectedWriter = false;
+    if (!wrapper->isWriting_.compare_exchange_strong(expectedWriter, true, std::memory_order_acq_rel)) {
+        return 0; // concurrent write detected; caller will retry
+    }
+    struct WriterGuard {
+        std::atomic<bool> &flag;
+        ~WriterGuard() { flag.store(false, std::memory_order_release); }
+    } writerGuard{wrapper->isWriting_};
 
     const jsize arrayLength = env->GetArrayLength(audioData);
     const int32_t channelCount = wrapper->configuredChannelCount;

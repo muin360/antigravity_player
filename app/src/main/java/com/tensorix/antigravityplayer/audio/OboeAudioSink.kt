@@ -479,7 +479,8 @@ class OboeAudioSink(
                 isBitPerfect = bitPerfectMode
             )
         } else {
-            val chunkBytes = usableBytes.coerceAtMost(directByteBuffer.capacity())
+            val maxAlignedBytes = directByteBuffer.capacity() - (directByteBuffer.capacity() % bytesPerFrame)
+            val chunkBytes = usableBytes.coerceAtMost(maxAlignedBytes)
             val chunkFrames = chunkBytes / bytesPerFrame
             directByteBuffer.clear()
             val slice = buffer.duplicate()
