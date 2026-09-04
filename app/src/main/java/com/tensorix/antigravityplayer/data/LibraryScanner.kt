@@ -170,8 +170,8 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
 
         if (scannedSongs.isNotEmpty()) {
             songDao.insertSongs(scannedSongs)
-            songDao.deleteStaleLocalSongs(scanStartTimestamp)
         }
+        songDao.deleteStaleLocalSongs(scanStartTimestamp)
 
         return@withContext scannedSongs
     }

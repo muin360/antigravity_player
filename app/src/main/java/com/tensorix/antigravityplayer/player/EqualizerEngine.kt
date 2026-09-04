@@ -425,6 +425,7 @@ class EqualizerEngine(private val context: Context) {
         }
         dspProcessor?.updateAllFiltersLive()
         _bandLevels.value = newLevels
+        syncWithDsp()
     }
 
     fun setReplayGainEnabled(enabled: Boolean) {

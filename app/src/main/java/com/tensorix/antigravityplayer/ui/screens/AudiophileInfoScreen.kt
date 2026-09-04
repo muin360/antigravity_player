@@ -94,29 +94,7 @@ fun AudiophileInfoScreen(
 ) {
     val track = snapshot.track
     val output = snapshot.output
-    
-    var peakL by remember { mutableStateOf(0f) }
-    var peakR by remember { mutableStateOf(0f) }
-    var phaseCorr by remember { mutableStateOf(1f) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
-            if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
-                peakL = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakL(handle).toFloat()
-                peakR = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakR(handle).toFloat()
-                phaseCorr = com.tensorix.antigravityplayer.audio.OboeBridge.getPhaseCorrelation(handle)
-            } else {
-                val dsp = PlaybackService.instance?.dspProcessor
-                if (dsp != null) {
-                    peakL = dsp.peakL.toFloat()
-                    peakR = dsp.peakR.toFloat()
-                    phaseCorr = dsp.phaseCorrelation
-                }
-            }
-            delay(16) // 60fps smooth VU and Phase update
-        }
-    }
 
     val dynamicState by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.dynamicProfileEngine?.engineState, null)
 
@@ -382,21 +360,7 @@ fun AudiophileInfoScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ULTIMATE 60FPS VU METERING & PHASE CORRELATION
-        val phaseCorr = PlaybackService.instance?.dspProcessor?.phaseCorrelation ?: 1.0f
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("ULTIMATE 64-BIT PEAK & PHASE MONITOR", color = PrimaryCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
-            Text(text = "CORR: ${"%.2f".format(phaseCorr)}", color = if (phaseCorr < 0) Color.Red else PrimaryCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(8.dp)).background(SurfaceDark).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                VuBar(peakL)
-                Spacer(modifier = Modifier.height(6.dp))
-                VuBar(peakR)
-            }
-        }
+        LiveTelemetryHUD()
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -953,11 +917,7 @@ fun AudiophileInfoScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
-                Text(
-                    text = "Distortion: UNAVAILABLE (No Hardware Sensor) | Peak L: ${"%.2f".format(peakL)} | Peak R: ${"%.2f".format(peakR)}",
-                    color = TextSecondary,
-                    fontSize = 11.sp
-                )
+                LivePeakText()
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1331,28 +1291,105 @@ private fun SignalPathCard(
 
 @Composable
 private fun VuBar(peak: Float) {
+    val barColor = when {
+        peak > 0.98f -> Color.Red
+        peak > 0.8f -> Color(0xFFFF9800)
+        else -> PrimaryCyan
+    }
+    
+    val widthFrac = peak.coerceIn(0f, 1f)
+    
     val animatedLevel by animateFloatAsState(
-        targetValue = peak.coerceIn(0f, 1f),
+        targetValue = widthFrac,
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow),
         label = "vu"
     )
-    
-    Box(modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.05f))) {
-        if (animatedLevel > 0.005f) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(animatedLevel)
-                    .fillMaxHeight()
-                    .background(
-                        Brush.horizontalGradient(
-                            0.0f to Color(0xFF00E5FF),
-                            0.7f to Color(0xFF7C4DFF),
-                            1.0f to Color(0xFFFF5252)
-                        )
-                    )
-            )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(12.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.5f))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(animatedLevel)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(6.dp))
+                .background(barColor)
+        )
+    }
+}
+
+@Composable
+private fun LiveTelemetryHUD() {
+    var peakL by remember { mutableStateOf(0f) }
+    var peakR by remember { mutableStateOf(0f) }
+    var phaseCorr by remember { mutableStateOf(1f) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
+            if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
+                peakL = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakL(handle).toFloat()
+                peakR = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakR(handle).toFloat()
+                phaseCorr = com.tensorix.antigravityplayer.audio.OboeBridge.getPhaseCorrelation(handle)
+            } else {
+                val dsp = PlaybackService.instance?.dspProcessor
+                if (dsp != null) {
+                    peakL = dsp.peakL.toFloat()
+                    peakR = dsp.peakR.toFloat()
+                    phaseCorr = dsp.phaseCorrelation
+                }
+            }
+            kotlinx.coroutines.delay(16) // 60fps smooth VU and Phase update
         }
     }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("ULTIMATE 64-BIT PEAK & PHASE MONITOR", color = PrimaryCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
+            Text(text = "CORR: ${"%.2f".format(phaseCorr)}", color = if (phaseCorr < 0) Color.Red else PrimaryCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(8.dp)).background(SurfaceDark).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                VuBar(peakL)
+                Spacer(modifier = Modifier.height(6.dp))
+                VuBar(peakR)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LivePeakText() {
+    var peakL by remember { mutableStateOf(0f) }
+    var peakR by remember { mutableStateOf(0f) }
+    
+    LaunchedEffect(Unit) {
+        while (true) {
+            val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
+            if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
+                peakL = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakL(handle).toFloat()
+                peakR = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakR(handle).toFloat()
+            } else {
+                val dsp = PlaybackService.instance?.dspProcessor
+                if (dsp != null) {
+                    peakL = dsp.peakL.toFloat()
+                    peakR = dsp.peakR.toFloat()
+                }
+            }
+            kotlinx.coroutines.delay(16)
+        }
+    }
+    
+    Text(
+        text = "Distortion: UNAVAILABLE (No Hardware Sensor) | Peak L: ${"%.2f".format(peakL)} | Peak R: ${"%.2f".format(peakR)}",
+        color = TextSecondary,
+        fontSize = 11.sp
+    )
 }
 
 @Composable

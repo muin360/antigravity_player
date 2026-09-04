@@ -180,19 +180,26 @@ AudiophileResampler::Result AudiophileResampler::process(
                     static_cast<float>(std::clamp(sample, -1.0, 1.0));
             }
         } else {
-            // Windowed-sinc polyphase FIR interpolation.
-            const int phase =
-                std::clamp(static_cast<int>(frac * NUM_PHASES), 0, static_cast<int>(NUM_PHASES) - 1);
-            const auto &phaseWeights = cfg->polyphaseTable[phase];
+            // Windowed-sinc polyphase FIR interpolation with linear inter-phase interpolation.
+            const double phaseRaw = frac * NUM_PHASES;
+            const int phase1 = std::clamp(static_cast<int>(std::floor(phaseRaw)), 0, static_cast<int>(NUM_PHASES) - 1);
+            const int phase2 = (phase1 + 1 < static_cast<int>(NUM_PHASES)) ? (phase1 + 1) : phase1;
+            const double phaseFrac = phaseRaw - std::floor(phaseRaw);
+            
+            const auto &phaseWeights1 = cfg->polyphaseTable[phase1];
+            const auto &phaseWeights2 = cfg->polyphaseTable[phase2];
 
             for (int32_t c = 0; c < ch; ++c) {
-                double sample = 0.0;
+                double sample1 = 0.0;
+                double sample2 = 0.0;
                 for (int t = 0; t < taps; ++t) {
                     const int32_t srcFrame =
                         std::clamp(baseInFrame - halfTaps + t, 0, totalWorkFrames - 1);
-                    sample += workBuffer_[static_cast<size_t>(srcFrame) * ch + c] *
-                              phaseWeights[t];
+                    const double srcSample = workBuffer_[static_cast<size_t>(srcFrame) * ch + c];
+                    sample1 += srcSample * phaseWeights1[t];
+                    sample2 += srcSample * phaseWeights2[t];
                 }
+                const double sample = sample1 + (sample2 - sample1) * phaseFrac;
                 outBuffer[static_cast<size_t>(outFrameCount) * ch + c] =
                     static_cast<float>(std::clamp(sample, -1.0, 1.0));
             }
