@@ -146,6 +146,7 @@ class PlaybackService : MediaSessionService() {
         }
         equalizerEngine = EqualizerEngine(applicationContext)
         equalizerEngine?.setDspProcessor(dspProcessor)
+        dspProcessor.replayGainEnabled = equalizerEngine?.replayGainEnabled?.value ?: true
         autoEqEngine = com.tensorix.antigravityplayer.audio.AutoEqEngine(applicationContext)
 
         val hifiSupported = OboeBridge.isAvailable && HardwareHiFiVerifier.isHiFiCapable(applicationContext)
@@ -501,7 +502,9 @@ class PlaybackService : MediaSessionService() {
         )
         
         _currentTrackInfo.value = info
-        if (trackReplayGainDb != 0f || albumReplayGainDb != 0f || peakAmplitude > 0f) {
+        val rgEnabled = equalizerEngine?.replayGainEnabled?.value ?: true
+        dspProcessor.replayGainEnabled = rgEnabled
+        if (rgEnabled && (trackReplayGainDb != 0f || albumReplayGainDb != 0f || peakAmplitude > 0f)) {
             dspProcessor.applyReplayGain(trackReplayGainDb, albumReplayGainDb, peakAmplitude, useAlbumGain)
         } else {
             dspProcessor.replayGainMultiplier = 1.0

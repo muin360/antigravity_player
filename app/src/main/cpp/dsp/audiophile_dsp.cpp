@@ -446,7 +446,7 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     const double preAmp = std::pow(10.0, p.preAmpGainDb / 20.0);
     const double replayGain = (p.replayGainActive && p.replayGainMultiplier > 0.0)
         ? p.replayGainMultiplier
-        : (p.replayGainMultiplier > 0.0 ? p.replayGainMultiplier : 1.0);
+        : 1.0;
     const double totalPreGain = preAmp * replayGain;
     const double warmSat = p.warmSaturationLevel;
     const double triode = p.triodeWarmthLevel;

@@ -909,87 +909,12 @@ class OboeAudioSink(
     }
 
     private fun syncDspParameters(handle: Long) {
-        val dsp = dspProcessor ?: return
-        try {
-            val isBypass = bitPerfectMode || dsp.isBitPerfectBypass
-            val eq = PlaybackService.instance?.equalizerEngine
-            val eqBands = DoubleArray(10) { idx ->
-                if (isBypass) 0.0 else (eq?.bandLevels?.value?.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
-            }
-
-            val flags = booleanArrayOf(
-                !isBypass && dsp.isEqActive,
-                !isBypass && (PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true),
-                !isBypass && (PlaybackService.instance?.autoEqEngine?.let { it.isAutoEqEnabled.value && (it.activeProfile.value?.bands?.isNotEmpty() == true) } ?: false),
-                !isBypass && dsp.isLimiterActive,
-                !isBypass && dsp.isDitherActive,
-                !isBypass && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001),
-                !isBypass && dsp.isCrossfeedActive,
-                !isBypass && dsp.isChannelBalanceActive,
-                !isBypass && (eq?.hrtfSpatialEnabled?.value == true),
-                !isBypass && dsp.isBassBoostActive,
-                !isBypass && dsp.isTrebleActive,
-                !isBypass && dsp.isClarityActive,
-                !isBypass && dsp.isHarmonicActive,
-                !isBypass && dsp.isSaturationActive,
-                !isBypass && dsp.isStereoExpansionActive,
-                !isBypass && dsp.isSubBassMonoActive,
-                false
-            )
-
-            val doubleParams = DoubleArray(27)
-            doubleParams[0] = if (isBypass) 0.0 else dsp.preAmpGainDb
-            doubleParams[1] = if (isBypass) 0.0 else dsp.bassBoostGainDb
-            doubleParams[2] = if (isBypass) 0.0 else dsp.trebleGainDb
-            doubleParams[3] = if (isBypass) 0.0 else dsp.harmonicExciterLevel
-            doubleParams[4] = if (isBypass) 0.0 else dsp.clarityEnhancerGain
-            doubleParams[5] = if (isBypass) 1.0 else dsp.stereoExpansionMultiplier
-            doubleParams[6] = if (isBypass) 1.0 else dsp.dvcVolume
-            doubleParams[7] = if (isBypass) 1.0 else dsp.replayGainMultiplier
-            doubleParams[8] = if (isBypass) 0.0 else dsp.ditherStrength
-            doubleParams[9] = if (isBypass) 0.0 else dsp.warmSaturationLevel
-            doubleParams[10] = if (isBypass) 0.0 else dsp.triodeWarmthLevel
-            doubleParams[11] = if (isBypass) 0.0 else dsp.pentodeTapeLevel
-            doubleParams[12] = if (isBypass) 0.0 else dsp.crossfeedLevel
-            doubleParams[13] = if (isBypass) 0.0 else dsp.limiterThresholdDb
-            doubleParams[14] = if (isBypass) 0.0 else dsp.channelBalance
-            doubleParams[15] = if (isBypass) 0.0 else dsp.airPresenceGainDb
-            doubleParams[16] = if (isBypass) 0.5 else (eq?.hrtfRoomSize?.value?.toDouble() ?: 0.5)
-            for (i in 0 until 10) {
-                doubleParams[17 + i] = eqBands[i]
-            }
-
-            OboeBridge.setDspParametersBatch(
-                handle = handle,
-                enabled = !isBypass && dsp.isEnabled,
-                bitPerfectBypass = isBypass,
-                activeFlags = flags,
-                params = doubleParams,
-                outputBitDepth = dsp.outputBitDepth,
-                invertPhase = !isBypass && dsp.invertPhase
-            )
-
-            // Sync Active AutoEQ PEQ Bands if enabled
-            PlaybackService.instance?.autoEqEngine?.let { autoEq ->
-                if (autoEq.isAutoEqEnabled.value && !isBypass) {
-                    autoEq.activeProfile.value?.let { profile ->
-                        OboeBridge.clearPeqBands(handle)
-                        profile.bands.forEach { band ->
-                            OboeBridge.addPeqBand(
-                                handle = handle,
-                                type = band.filterType,
-                                frequency = band.frequencyHz,
-                                q = band.qFactor,
-                                gainDb = band.gainDb
-                            )
-                        }
-                    }
-                } else {
-                    OboeBridge.clearPeqBands(handle)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG_LOG, "DSP parameter initial sync error: ${e.message}")
+        val eq = PlaybackService.instance?.equalizerEngine
+        if (eq != null) {
+            eq.syncWithNativeDsp(handle)
+        } else {
+            // EqualizerEngine not yet attached; configure neutral bit-perfect bypass state
+            OboeBridge.setBitPerfectBypass(handle, bitPerfectMode)
         }
     }
 

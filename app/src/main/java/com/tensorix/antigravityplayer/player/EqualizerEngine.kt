@@ -203,12 +203,13 @@ class EqualizerEngine(private val context: Context) {
         syncWithDsp()
     }
 
-    internal fun syncWithNativeDsp() {
-        val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
+    internal fun syncWithNativeDsp(targetHandle: Long = 0L) {
+        val handle = if (targetHandle != 0L) targetHandle else com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
         if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
             try {
                 val isBypass = _isBitPerfectBypass.value
                 val isEnabled = _isEnabled.value
+                val isRgEnabled = _replayGainEnabled.value
                 val dsp = dspProcessor
                 val eqBands = DoubleArray(10) { idx ->
                     if (isBypass) 0.0 else (_bandLevels.value.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
@@ -220,7 +221,7 @@ class EqualizerEngine(private val context: Context) {
                     !isBypass && isEnabled && (PlaybackService.instance?.autoEqEngine?.let { it.isAutoEqEnabled.value && (it.activeProfile.value?.bands?.isNotEmpty() == true) } ?: false), // 2: peqActive
                     !isBypass && isEnabled && (dsp?.isLimiterActive ?: true),    // 3: limiterActive
                     !isBypass && isEnabled && (dsp?.isDitherActive == true), // 4: ditherActive
-                    !isBypass && isEnabled && (dsp != null && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001)), // 5: replayGainActive
+                    !isBypass && isEnabled && isRgEnabled && (dsp != null && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001)), // 5: replayGainActive
                     !isBypass && isEnabled && _crossfeedLevel.value > 0.001, // 6: crossfeedActive
                     !isBypass && isEnabled && (_channelBalance.value < -0.01 || _channelBalance.value > 0.01), // 7: balanceActive
                     !isBypass && isEnabled && _hrtfSpatialEnabled.value, // 8: spatialActive
@@ -242,7 +243,7 @@ class EqualizerEngine(private val context: Context) {
                 doubleParams[4] = if (isBypass) 0.0 else _clarityGain.value.toDouble()
                 doubleParams[5] = if (isBypass) 1.0 else _stereoExpansion.value.toDouble()
                 doubleParams[6] = if (isBypass) 1.0 else (dsp?.dvcVolume ?: 1.0)
-                doubleParams[7] = if (isBypass) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
+                doubleParams[7] = if (isBypass || !isRgEnabled) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
                 doubleParams[8] = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0)
                 doubleParams[9] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
                 doubleParams[10] = if (isBypass) 0.0 else _triodeWarmth.value.toDouble()
@@ -308,6 +309,7 @@ class EqualizerEngine(private val context: Context) {
             dsp.crossfeedLevel = _crossfeedLevel.value.toDouble()
             dsp.channelBalance = _channelBalance.value.toDouble()
             dsp.invertPhase = _invertPhase.value
+            dsp.replayGainEnabled = _replayGainEnabled.value
             dsp.preAmpGainDb = _preAmpGainDb.value.toDouble()
             dsp.bassBoostGainDb = (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0 // Map 0-1000 to 0-15dB
             dsp.trebleGainDb = (_trebleStrength.value.toDouble() / 1500.0) * 15.0 // Map 0-1500 to 0-15dB
@@ -487,7 +489,9 @@ class EqualizerEngine(private val context: Context) {
 
     fun setReplayGainEnabled(enabled: Boolean) {
         _replayGainEnabled.value = enabled
+        dspProcessor?.replayGainEnabled = enabled
         prefs.edit().putBoolean("replay_gain_enabled", enabled).apply()
+        syncWithDsp()
     }
 
     fun setSubBassMono(enabled: Boolean) {

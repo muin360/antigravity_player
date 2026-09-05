@@ -24,6 +24,7 @@ data class FallbackDspSnapshot(
     val clarityEnhancerGain: Double = 0.0,
     val stereoExpansionMultiplier: Double = 1.0,
     val dvcVolume: Double = 1.0,
+    val replayGainEnabled: Boolean = true,
     val replayGainMultiplier: Double = 1.0,
     val ditherStrength: Double = 0.0,
     val outputBitDepth: Int = 24,
@@ -140,6 +141,10 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         set(value) { field = value; rebuildSnapshot() }
 
     @Volatile
+    var replayGainEnabled: Boolean = true
+        set(value) { field = value; rebuildSnapshot() }
+
+    @Volatile
     var replayGainMultiplier: Double = 1.0
         set(value) { field = value; rebuildSnapshot() }
 
@@ -244,7 +249,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
     val isReplayGainActive: Boolean
         get() = activeSnapshot.let { snap ->
-            snap.isEnabled && !snap.isBitPerfectBypass &&
+            snap.isEnabled && !snap.isBitPerfectBypass && snap.replayGainEnabled &&
                 (snap.replayGainMultiplier < 0.999 || snap.replayGainMultiplier > 1.001)
         }
 
@@ -334,6 +339,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                 clarityEnhancerGain = clarityEnhancerGain,
                 stereoExpansionMultiplier = stereoExpansionMultiplier,
                 dvcVolume = dvcVolume,
+                replayGainEnabled = replayGainEnabled,
                 replayGainMultiplier = replayGainMultiplier,
                 ditherStrength = ditherStrength,
                 outputBitDepth = outputBitDepth,
@@ -462,7 +468,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         val bypass = snap.isBitPerfectBypass || !snap.isEnabled
 
         val preAmpMultiplier = 10.0.pow(snap.preAmpGainDb / 20.0)
-        val replayGain = if (snap.replayGainMultiplier > 0.0) snap.replayGainMultiplier else 1.0
+        val replayGain = if (snap.replayGainEnabled && snap.replayGainMultiplier > 0.0) snap.replayGainMultiplier else 1.0
         val totalPreGain = preAmpMultiplier * replayGain
         val dvc = snap.dvcVolume
         val warmSat = snap.warmSaturationLevel

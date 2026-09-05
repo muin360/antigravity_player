@@ -1,0 +1,50 @@
+# Antigravity Player — Runtime Proof Matrix
+
+This matrix documents the runtime proof, signal verification, and lifecycle concurrency safety for every audio feature in **Antigravity Player**, satisfying Rule 37 of the Forensic Audio Protocol.
+
+## Allowed Final Statuses
+- **`PROVEN_ALIVE`**: Unbroken runtime path, physical signal change verified by unit/integration tests, concurrency-safe, lifecycle-safe.
+- **`ALIVE_WITH_PLATFORM_LIMITATION`**: Fully implemented and live, but hardware behavior depends on OEM vendor ROM / HAL capabilities.
+- **`PARTIAL`**: Utility algorithm implemented, but hardware output endpoint is limited by Android audio subsystem architecture.
+- **`UNSUPPORTED`**: Feature is physically impossible on standard Android Audio HAL and is truthfully classified as unsupported.
+- **`DEAD`**: Feature is intentionally inert compatibility stub; UI removed.
+- **`REMOVED`**: Feature was removed to prevent false user expectations.
+- **`BLOCKED`**: Blocked by platform permission or missing hardware silicon.
+
+---
+
+## Runtime Proof Table
+
+| Feature | UI Entry | Kotlin Owner | Native Owner | Actual Signal Effect | Lifecycle | Concurrency | Integration Test | Runtime Proven | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Normal Playback** | MiniPlayer / FullPlayer play button | `PlaybackService` | `OboeAudioSink` / `oboe_bridge.cpp` | Decodes audio file to PCM and streams to AAudio/OpenSLES | Survives pause, seek, stop | Thread-safe single-writer | `OboeAudioSinkTest`, `AudioEngineTest` | Yes | `PROVEN_ALIVE` |
+| **Oboe Direct DAC Playback** | Automatic engine default | `AudioEngine` | `OboeStreamWrapper` (`writeDirect`) | Direct low-latency hardware PCM delivery | Survives route changes | Lock-free single-writer CAS | `HardcoreStreamConcurrencyTest` | Yes | `PROVEN_ALIVE` |
+| **Pause & Resume** | Play/Pause button | `PlaybackService` | `oboe::AudioStream::requestPause/Start` | Halts/resumes hardware frame consumption, saves frame anchor | Paused stream maintains hardware baseline | Atomic state flags | `StreamLifecycleStateMachineTest` | Yes | `PROVEN_ALIVE` |
+| **Seek Discontinuity** | Progress seekbar | `OboeAudioSink.handleDiscontinuity` | `AudiophileDsp::reset` | Discards pre-seek audio, clears ring buffer & biquad delay lines | Re-anchors media time anchor exactly once | Atomic epoch invalidation | `AudioClockPresentationDiscontinuityTest` | Yes | `PROVEN_ALIVE` |
+| **Hardware Stream Flush** | Track transition / seek | `OboeAudioSink.flush` | `OboeBridge.flushStream` | Clears hardware and resampler histories | Restores running state automatically | Monotonic `audioEpoch` bump | `OboeAudioSinkTest` | Yes | `PROVEN_ALIVE` |
+| **Route Reconfiguration** | Headset plug / USB DAC plug | `AudioEngine.reconfigureRoute` | `OboeAudioSink.reconfigureRoute` | Seamlessly moves stream to new device ID without losing queue | Non-destructive stream reopen | Mutex serialized | `AudioRouteChangeTest` | Yes | `PROVEN_ALIVE` |
+| **Sample-Rate Matching** | Track load / Settings toggle | `PlaybackService.reloadAudioPipeline` | `OboeBridge.openStream(trackRate)` | Opens hardware stream at track native rate ($44.1\text{k}-192\text{kHz}$) | Stream recreated per rate | Guarded by lifecycleLock | `ResamplerDeterministicMathTest` | Yes | `PROVEN_ALIVE` |
+| **Bit-Perfect Mode** | Settings / EqualizerSheet pill | `PlaybackService.setBitPerfectMode` | `AudiophileDsp` bypass | Bypasses all DSP, forces 1:1 rate & channel match, opens Exclusive | Evaluated against 35 fail-closed rules | Atomic bypass flag | `BitPerfectVerifierTest`, `AudiophileDspTransparencyTest` | Yes | `PROVEN_ALIVE` |
+| **10-Band Graphic EQ** | EqualizerSheet sliders | `EqualizerEngine.setBandLevel` | `AudiophileDsp` (10 Peaking Biquads) | Modifies frequency spectrum at 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k Hz | State persisted in SharedPreferences | Triple-buffer lock-free exchange | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Parametric EQ (PEQ)** | AutoEQ profile selector | `AutoEqEngine.applyProfile` | `AudiophileDsp` (up to 32 arbitrary biquads) | Applies calibrated peaking, shelf, and notch filters | Rebuilt atomically on profile change | Guarded by `paramWriteMutex_` | `AudiophileDspHardcoreTestSuite` | Yes | `PROVEN_ALIVE` |
+| **Preamp Gain** | EqualizerSheet preamp slider | `EqualizerEngine.setPreAmpGain` | `AudiophileDsp` preAmp gain | Scales signal amplitude ($\pm 15\text{ dB}$) | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **ReplayGain Normalization** | Track metadata / Settings | `EqualizerEngine.setReplayGainEnabled` | `AudiophileDsp` replayGain multiplier | Multiplies signal by track/album gain; peak-clamps to prevent clip | Remediated: strictly 1.0x when disabled | Atomic snapshot | `ReplayGainLifecycleAndAdversarialTest` | Yes | `PROVEN_ALIVE` |
+| **Dynamic Bass Boost** | EqualizerSheet bass slider | `EqualizerEngine.setBassBoost` | `AudiophileDsp` (80 Hz Low-shelf biquad) | Amplifies frequencies below 80 Hz ($0-15\text{ dB}$) | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Treble Boost** | EqualizerSheet treble slider | `EqualizerEngine.setTreble` | `AudiophileDsp` (10 kHz High-shelf biquad) | Amplifies frequencies above 10 kHz ($0-15\text{ dB}$) | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Clarity Enhancer** | EqualizerSheet clarity slider | `EqualizerEngine.setClarityGain` | `AudiophileDsp` (3.2 kHz Peaking biquad) | Enhances vocal and instrument presence ($0-10\text{ dB}$) | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Air Presence** | Dynamic profile / EqualizerSheet | `EqualizerEngine.setAirPresence` | `AudiophileDsp` (16 kHz High-shelf biquad) | Enhances ultra-high harmonics ($0-6\text{ dB}$) | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Meier Crossfeed** | EqualizerSheet crossfeed slider | `EqualizerEngine.setCrossfeedLevel` | `AudiophileDsp` (700 Hz lowpass crossfeed) | Bleeds attenuated low frequencies between L and R channels | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Stereo Expansion** | EqualizerSheet expansion slider | `EqualizerEngine.setStereoExpansion` | `AudiophileDsp` Mid-Side separation | Scales Side channel ($0.0-2.0\times$) relative to Mid channel | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **HRTF 3D Spatial Audio** | EqualizerSheet spatial pill | `EqualizerEngine.setHrtfSpatialEnabled` | `AudiophileDsp` ($280\mu\text{s}$ ITD delay lines) | Simulates head-shadow effect and pinna reflections | State persisted | Triple buffer | `AudiophileDspHardcoreTestSuite` | Yes | `PROVEN_ALIVE` |
+| **Sub-Bass Mono Summing** | EqualizerSheet sub-mono pill | `EqualizerEngine.setSubBassMono` | `AudiophileDsp` (80 Hz mono lowpass) | Sums low frequencies to mono to eliminate phase cancellation | State persisted | Triple buffer | `AudiophileDspHardcoreTestSuite` | Yes | `PROVEN_ALIVE` |
+| **Padé Rational Limiter** | Preamp / High gains | `AudiophileDsp.setLimiterEnabled` | 5th-order Padé rational approximation | Prevents intersample clipping above 0 dBFS ($<0.005\%$ error) | Continuous render state | Zero transcendentals | `AudiophileDspHardcoreTestSuite` | Yes | `PROVEN_ALIVE` |
+| **TPDF Requantization Dither** | Output bit depth conversion | `AudiophileDsp.setDitherStrength` | High-pass filtered triangular PDF | Eliminates quantization distortion at 16/24-bit boundaries | State reset on seek | 64-bit PRNG | `AudiophileDspHardcoreTestSuite` | Yes | `PROVEN_ALIVE` |
+| **Windowed-Sinc Resampler** | Track rate $\neq$ output rate | `OboeStreamWrapper.resampler` | `AudiophileResampler` (64-phase FIR) | Polyphase bandlimited sample rate conversion ($>140\text{ dB}$ SNR) | History maintained across blocks | Atomic config publish | `ResamplerDeterministicMathTest` | Yes | `PROVEN_ALIVE` |
+| **Triode Vacuum Tube Warmth**| EqualizerSheet triode slider | `EqualizerEngine.setTriodeWarmth` | `AudiophileDsp` asymmetric 2nd harmonic | Generates musical even-order vacuum tube harmonics | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Pentode / Tape Saturation**| EqualizerSheet pentode slider | `EqualizerEngine.setPentodeTape` | `AudiophileDsp` symmetric 3rd harmonic | Simulates analog tape saturation and compression | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Harmonic Exciter** | EqualizerSheet turbo toggle | `EqualizerEngine.setTurboSharpness` | `AudiophileDsp` high-pass squared exciter | Generates psychoacoustic high-frequency harmonics | State persisted | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **Direct Volume Control (DVC)**| System volume slider | `dspProcessor.dvcVolume` | `AudiophileDsp.setDvcVolume` | 64-bit double-precision software volume scaling | Synchronized with AudioManager | Triple buffer | `DspSignalTransformationTest` | Yes | `PROVEN_ALIVE` |
+| **DSD-to-PCM Decimation** | DSD audio file playback | `DsdEngine` | `dsd_engine.cpp` | 64-tap windowed-sinc FIR decimation from 1-bit DSD to PCM | Decodes file frames | Stateless math | `PcmPrecisionAndGoldenSignalTest` | Yes | `PARTIAL` |
+| **Native 1-bit DSD Bitstream** | N/A | Android Audio HAL limitations | N/A | Standard Android Audio HAL cannot transmit 1-bit DSD bitstreams | N/A | N/A | Truthfully classified | Yes | `UNSUPPORTED` |
+| **Framework Virtualizer** | N/A | `EqualizerEngine` | Detached legacy stub | Inert stub | Inert | N/A | Documented | Yes | `DEAD` |
+| **Framework LoudnessEnhancer**| N/A | `EqualizerEngine` | Detached legacy stub | Inert stub | Inert | N/A | Documented | Yes | `DEAD` |

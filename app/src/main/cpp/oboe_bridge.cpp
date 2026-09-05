@@ -493,10 +493,10 @@ namespace {
     jlong registerStream(const std::shared_ptr<OboeStreamWrapper> &wrapper) {
         const jlong handle = gNextHandle.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(gRegistryMutex);
-        gStreamRegistry[handle] = wrapper;
 
         // Publish to lock-free slot table
         const size_t preferredSlot = static_cast<size_t>(handle) % kMaxRegistrySlots;
+        bool published = false;
         for (size_t offset = 0; offset < kMaxRegistrySlots; ++offset) {
             const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
             auto &slot = gStreamSlots[idx];
@@ -505,27 +505,30 @@ namespace {
                 slot.generationId.store(wrapper->generationId, std::memory_order_relaxed);
                 slot.wrapper.store(wrapper.get(), std::memory_order_relaxed);
                 slot.handle.store(handle, std::memory_order_release);
+                published = true;
                 break;
             }
         }
+
+        if (!published) {
+            LOGE("Stream slot registry full (exceeded %zu active slots); registration failed", kMaxRegistrySlots);
+            return 0; // Fail closed; never return a handle without a valid slot
+        }
+
+        gStreamRegistry[handle] = wrapper;
         return handle;
     }
 
     void unregisterStream(jlong handle) {
         std::shared_ptr<OboeStreamWrapper> toClose;
+        StreamSlot *slotToDrain = nullptr;
         {
             std::lock_guard<std::mutex> lock(gRegistryMutex);
-            // 1. Remove from lock-free slot table so no new writes can acquire lease
+            // 1. Invalidate handle in slot table so no new writes can acquire lease
             for (auto &slot : gStreamSlots) {
                 if (slot.handle.load(std::memory_order_relaxed) == handle) {
                     slot.handle.store(0, std::memory_order_release);
-                    // Wait for active users in writeDirect to finish
-                    while (slot.activeUsers.load(std::memory_order_acquire) > 0) {
-                        struct timespec req = {0, 500000L}; // 0.5 ms
-                        nanosleep(&req, nullptr);
-                    }
-                    slot.wrapper.store(nullptr, std::memory_order_release);
-                    slot.generationId.store(0, std::memory_order_relaxed);
+                    slotToDrain = &slot;
                     break;
                 }
             }
@@ -536,7 +539,19 @@ namespace {
                 gStreamRegistry.erase(it);
             }
         }
-        // Wrapper destruction closes the stream; any in-flight writer will safely exit
+
+        // 2. Wait for active users in writeDirect to finish OUTSIDE gRegistryMutex
+        // This eliminates contention and prevents blocking openStream() on other threads.
+        if (slotToDrain) {
+            while (slotToDrain->activeUsers.load(std::memory_order_acquire) > 0) {
+                struct timespec req = {0, 500000L}; // 0.5 ms
+                nanosleep(&req, nullptr);
+            }
+            slotToDrain->wrapper.store(nullptr, std::memory_order_release);
+            slotToDrain->generationId.store(0, std::memory_order_relaxed);
+        }
+
+        // 3. Close stream safely
         if (toClose) {
             toClose->closeInternal();
         }
