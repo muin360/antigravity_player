@@ -46,7 +46,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Audiophile-Grade Core Playback Service with True Hi-Res Audio Architecture:
- *  - 24-bit / 32-bit Float Output direct passthrough (FLAC, WAV, ALAC, DSD)
+ *  - 24-bit / 32-bit Float Output direct passthrough (FLAC, WAV, ALAC, and decoded PCM streams)
  *  - Dynamic Hardware Sample Rate Matching (44.1kHz, 48kHz, 88.2kHz, 96kHz, 176.4kHz, 192kHz)
  *  - Bit-Perfect DSP Bypass switch for studio-master audio clarity
  *  - Authoritative AudioEngine owning stream lifecycle and non-destructive route changes

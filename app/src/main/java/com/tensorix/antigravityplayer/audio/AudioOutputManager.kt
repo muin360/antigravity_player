@@ -276,6 +276,8 @@ class AudioOutputManager(
         val dspRg = dsp?.replayGainMultiplier ?: 1.0f
         val dspLimiter = dsp?.isLimiterActive ?: false
         val dspDither = dsp?.isDitherActive ?: false
+        val autoEqEnabled = service?.autoEqEngine?.isAutoEqEnabled?.value ?: false
+        val autoEqProfileId = service?.autoEqEngine?.activeProfile?.value?.id ?: ""
         val key = listOf(
             trackInfo?.title, trackInfo?.artist, trackInfo?.sampleRateHz,
             trackInfo?.bitDepth, trackInfo?.codec, isDspActive,
@@ -296,6 +298,8 @@ class AudioOutputManager(
             dspRg,
             dspLimiter,
             dspDither,
+            autoEqEnabled,
+            autoEqProfileId,
             cachedRoutes.map { "${it.routeType}_${it.deviceName}" }
         )
         if (key == memoKey) return memoState ?: scanOutputStateUncached(trackInfo, isDspActive)

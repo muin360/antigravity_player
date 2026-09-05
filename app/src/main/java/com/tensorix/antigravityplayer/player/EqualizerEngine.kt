@@ -28,8 +28,6 @@ class EqualizerEngine(private val context: Context) {
 
     private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
-    private var virtualizer: Virtualizer? = null
-    private var loudnessEnhancer: LoudnessEnhancer? = null
 
     private var currentAudioSessionId: Int = 0
 
@@ -84,6 +82,12 @@ class EqualizerEngine(private val context: Context) {
 
     private val _warmSaturation = MutableStateFlow<Float>(prefs.getFloat("warm_saturation", 0.0f))
     val warmSaturation: StateFlow<Float> = _warmSaturation.asStateFlow()
+
+    private val _triodeWarmth = MutableStateFlow<Float>(prefs.getFloat("triode_warmth", 0.0f))
+    val triodeWarmth: StateFlow<Float> = _triodeWarmth.asStateFlow()
+
+    private val _pentodeTape = MutableStateFlow<Float>(prefs.getFloat("pentode_tape", 0.0f))
+    val pentodeTape: StateFlow<Float> = _pentodeTape.asStateFlow()
 
     private val _airPresence = MutableStateFlow<Float>(prefs.getFloat("air_presence", 0.0f))
     val airPresence: StateFlow<Float> = _airPresence.asStateFlow()
@@ -167,7 +171,7 @@ class EqualizerEngine(private val context: Context) {
     )
 
     fun setTriodeWarmth(level: Float) {
-        _warmSaturation.value = level // Using warmSaturation as proxy for now
+        _triodeWarmth.value = level
         dspProcessor?.triodeWarmthLevel = level.toDouble()
         dspProcessor?.updateAllFiltersLive()
         prefs.edit { putFloat("triode_warmth", level) }
@@ -175,6 +179,7 @@ class EqualizerEngine(private val context: Context) {
     }
 
     fun setPentodeTape(level: Float) {
+        _pentodeTape.value = level
         dspProcessor?.pentodeTapeLevel = level.toDouble()
         dspProcessor?.updateAllFiltersLive()
         prefs.edit { putFloat("pentode_tape", level) }
@@ -223,7 +228,7 @@ class EqualizerEngine(private val context: Context) {
                     !isBypass && isEnabled && _trebleStrength.value > 10,   // 10: trebleActive
                     !isBypass && isEnabled && _clarityGain.value > 0.01,    // 11: clarityActive
                     !isBypass && isEnabled && _isTurboSharpness.value,      // 12: harmonicExciterActive
-                    !isBypass && isEnabled && _warmSaturation.value > 0.001,// 13: saturationActive
+                    !isBypass && isEnabled && (_warmSaturation.value > 0.001 || _triodeWarmth.value > 0.001 || _pentodeTape.value > 0.001), // 13: saturationActive
                     !isBypass && isEnabled && (_stereoExpansion.value < 0.99 || _stereoExpansion.value > 1.01), // 14: stereoExpansionActive
                     !isBypass && isEnabled && _subBassMono.value,          // 15: subBassMonoActive
                     false                                                 // 16: channelTransformActive
@@ -240,8 +245,8 @@ class EqualizerEngine(private val context: Context) {
                 doubleParams[7] = if (isBypass) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
                 doubleParams[8] = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0)
                 doubleParams[9] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
-                doubleParams[10] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
-                doubleParams[11] = if (isBypass) 0.0 else (dsp?.pentodeTapeLevel ?: 0.0)
+                doubleParams[10] = if (isBypass) 0.0 else _triodeWarmth.value.toDouble()
+                doubleParams[11] = if (isBypass) 0.0 else _pentodeTape.value.toDouble()
                 doubleParams[12] = if (isBypass) 0.0 else _crossfeedLevel.value.toDouble()
                 doubleParams[13] = if (isBypass) 0.0 else _limiterThreshold.value.toDouble()
                 doubleParams[14] = if (isBypass) 0.0 else _channelBalance.value.toDouble()
@@ -260,6 +265,26 @@ class EqualizerEngine(private val context: Context) {
                     outputBitDepth = dsp?.outputBitDepth ?: 24,
                     invertPhase = !isBypass && _invertPhase.value
                 )
+
+                // Synchronize AutoEQ PEQ bands if active
+                PlaybackService.instance?.autoEqEngine?.let { autoEq ->
+                    if (autoEq.isAutoEqEnabled.value && !isBypass && isEnabled) {
+                        autoEq.activeProfile.value?.let { profile ->
+                            com.tensorix.antigravityplayer.audio.OboeBridge.clearPeqBands(handle)
+                            profile.bands.forEach { band ->
+                                com.tensorix.antigravityplayer.audio.OboeBridge.addPeqBand(
+                                    handle = handle,
+                                    type = band.filterType,
+                                    frequency = band.frequencyHz,
+                                    q = band.qFactor,
+                                    gainDb = band.gainDb
+                                )
+                            }
+                        }
+                    } else if (isBypass || !isEnabled) {
+                        com.tensorix.antigravityplayer.audio.OboeBridge.clearPeqBands(handle)
+                    }
+                }
             } catch (e: Exception) {
                 Log.w("EqualizerEngine", "Native DSP sync notice: ${e.message}")
             }
@@ -548,11 +573,7 @@ class EqualizerEngine(private val context: Context) {
     fun release() {
         runCatching { equalizer?.release() }
         runCatching { bassBoost?.release() }
-        runCatching { virtualizer?.release() }
-        runCatching { loudnessEnhancer?.release() }
         equalizer = null
         bassBoost = null
-        virtualizer = null
-        loudnessEnhancer = null
     }
 }

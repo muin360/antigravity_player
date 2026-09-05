@@ -459,6 +459,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         val bypass = snap.isBitPerfectBypass || !snap.isEnabled
 
         val preAmpMultiplier = 10.0.pow(snap.preAmpGainDb / 20.0)
+        val replayGain = if (snap.replayGainMultiplier > 0.0) snap.replayGainMultiplier else 1.0
+        val totalPreGain = preAmpMultiplier * replayGain
         val dvc = snap.dvcVolume
         val warmSat = snap.warmSaturationLevel
         val triode = snap.triodeWarmthLevel
@@ -501,7 +503,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
             if (!bypass) {
                 for (ch in 0 until channelCount) {
-                    frameSamples[ch] *= preAmpMultiplier
+                    frameSamples[ch] *= totalPreGain
                 }
 
                 if (nonlinearEngaged) {
@@ -528,15 +530,17 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                         for (i in 0..1) {
                             var sm = upsampledPair[i]
 
-                            if (warmSat > 0 || triode > 0) {
-                                val warmFactor = warmSat + triode
-                                sm += warmFactor * (sm.pow(3.0) - sm)
-                                if (triode > 0) {
-                                    sm += triode * 0.15 * (sm * sm * (if (sm > 0) 1.0 else -1.0))
-                                }
+                            // Symmetric 3rd-harmonic tape saturation
+                            if (warmSat > 0.0) {
+                                sm += warmSat * (sm.pow(3.0) - sm)
                             }
 
-                            if (pentode > 0) {
+                            // Dedicated asymmetric 2nd-harmonic triode vacuum tube warmth
+                            if (triode > 0.0) {
+                                sm += triode * 0.25 * (sm * sm * (if (sm >= 0.0) 1.0 else -0.5) - 0.1 * sm)
+                            }
+
+                            if (pentode > 0.0) {
                                 sm -= pentode * 0.1 * (sm * sm * sm)
                             }
 

@@ -444,6 +444,10 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
 
     const DspParams &p = active_;
     const double preAmp = std::pow(10.0, p.preAmpGainDb / 20.0);
+    const double replayGain = (p.replayGainActive && p.replayGainMultiplier > 0.0)
+        ? p.replayGainMultiplier
+        : (p.replayGainMultiplier > 0.0 ? p.replayGainMultiplier : 1.0);
+    const double totalPreGain = preAmp * replayGain;
     const double warmSat = p.warmSaturationLevel;
     const double triode = p.triodeWarmthLevel;
     const double pentode = p.pentodeTapeLevel;
@@ -475,11 +479,12 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     for (size_t b = 0; b < kNumBands; ++b) {
         if (p.bandGainsDb[b] < -0.01 || p.bandGainsDb[b] > 0.01) { hasEqGain = true; break; }
     }
+    const bool replayGainActive = p.replayGainActive && (replayGain < 0.9999 || replayGain > 1.0001);
     const bool hasActiveProcessing = shapingStageEngaged || (clarityGain > 0.01) ||
         (p.bassBoostGainDb > 0.01) || (p.trebleGainDb > 0.01) || (p.preAmpGainDb < -0.01 || p.preAmpGainDb > 0.01) ||
         (peqActiveCount_ > 0) || (crossfeed > 0.001) || subMono ||
         (airGain > 0.01) || hrtfOn || hasEqGain || (stereoExp < 0.99 || stereoExp > 1.01) ||
-        (balance < -0.01 || balance > 0.01) || invPhase;
+        (balance < -0.01 || balance > 0.01) || invPhase || replayGainActive;
 
     // Mathematically exact identity when all features are neutral and volume is unity
     if (!hasActiveProcessing && !limiterOn && !ditherOn && (dvc >= 0.99999 && dvc <= 1.00001)) {
@@ -517,9 +522,9 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
         double sL = static_cast<double>(audioData[baseIdx]);
         double sR = (channelCount > 1) ? static_cast<double>(audioData[baseIdx + 1]) : sL;
 
-        // 1. Pre-amp gain
-        sL *= preAmp;
-        sR *= preAmp;
+        // 1. Pre-amp and ReplayGain gain
+        sL *= totalPreGain;
+        sR *= totalPreGain;
 
         // 2. Interpolated waveshaping stage
         if (shapingStageEngaged) {
@@ -543,14 +548,17 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
                 for (double &smpRef : upsampled) {
                     double smp = smpRef;
 
-                    if (warmSat > 0.0 || triode > 0.0) {
-                        const double warmFactor = warmSat + triode;
-                        smp = smp + (warmFactor * (smp * smp * smp - smp));
-                        if (triode > 0.0) {
-                            smp += triode * 0.15 * (smp * smp * (smp > 0.0 ? 1.0 : -1.0));
-                        }
+                    // Symmetric 3rd-harmonic tape saturation
+                    if (warmSat > 0.0) {
+                        smp = smp + (warmSat * (smp * smp * smp - smp));
                     }
 
+                    // Dedicated asymmetric 2nd-harmonic triode vacuum tube warmth
+                    if (triode > 0.0) {
+                        smp = smp + triode * 0.25 * (smp * smp * (smp >= 0.0 ? 1.0 : -0.5) - 0.1 * smp);
+                    }
+
+                    // Pentode soft tape compression
                     if (pentode > 0.0) {
                         smp = fastTanh(smp * (1.0 + pentode * 0.6)) / (1.0 + pentode * 0.3);
                     }

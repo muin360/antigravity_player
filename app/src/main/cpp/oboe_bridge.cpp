@@ -147,9 +147,12 @@ public:
     // lock (P0-4). Data is copied into the preallocated scratch first so no
     // live pointer ever depends on mutable container state.
     // Takes a shared_ptr snapshot so the stream object cannot be destroyed
-    // underneath an in-flight write even if closeInternal() runs concurrently.
+    // Render thread only: drain staged output to hardware WITHOUT holding any
+    // lock. Data is copied into the preallocated scratch first so no
+    // live pointer ever depends on mutable container state.
+    // Takes an oboe::AudioStream pointer guarded by caller's activeWriters_ reference.
     // Returns frames written this call; sets *stalled on fatal conditions.
-    int32_t drainRingToStream(const std::shared_ptr<oboe::AudioStream> &s, int32_t channels, bool *stalled) {
+    int32_t drainRingToStream(oboe::AudioStream *s, int32_t channels, bool *stalled) {
         if (!s) {
             *stalled = true;
             return 0;
@@ -194,11 +197,10 @@ public:
     }
 
     std::mutex lifecycleMutex;
+    std::atomic<oboe::AudioStream*> rawStream_{nullptr};
+    std::atomic<int32_t> activeWriters_{0};
 
-    // Formally race-safe stream pointer snapshot (P0 Rule 2):
-    // Never access wrapper->stream.get() outside lifecycleMutex.
-    // Returns a shared_ptr copy whose refcount keeps the underlying AudioStream
-    // alive on the caller's stack throughout concurrent write operations.
+    // Formally race-safe stream pointer snapshot for control-plane callers:
     std::shared_ptr<oboe::AudioStream> getStreamSnapshot() {
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         return stream;
@@ -229,7 +231,14 @@ public:
         if (!isActive.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
+        // Quiescence wait: wait until any active audio writer has finished writing.
+        // Hot-path writes are bounded by kWriteTimeoutNs (20ms), so this completes in at most a few ms.
+        while (activeWriters_.load(std::memory_order_acquire) > 0) {
+            struct timespec req = {0, 500000L}; // 0.5 ms
+            nanosleep(&req, nullptr);
+        }
         std::lock_guard<std::mutex> lock(lifecycleMutex);
+        rawStream_.store(nullptr, std::memory_order_release);
         if (stream) {
             stream->stop();
             stream->close();
@@ -401,6 +410,7 @@ public:
              oboe::convertToText(error),
              static_cast<unsigned long long>(generationId));
         isActive.store(false, std::memory_order_release);
+        rawStream_.store(nullptr, std::memory_order_release);
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         if (stream.get() == audioStream) {
             stream = nullptr;
@@ -409,15 +419,67 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// Registry: opaque monotonically-increasing integer handles -> wrappers.
-// Handles are never reused, so a stale Kotlin handle can never alias a newer
-// native stream, and generation checks add a second line of defence.
+// Lock-Free Generational Stream Registry (P0 & Phase 1)
+//
+// The realtime write path (writeDirect/write) uses an atomic generational slot
+// table with atomic reader tracking (activeUsers). The audio thread NEVER
+// acquires gRegistryMutex, NEVER allocates memory, and NEVER blocks.
+//
+// Unregister/close on the control thread removes the slot, waits for any in-flight
+// reader/writer to finish (quiescence / grace period), and safely reclaims the stream.
+// Handles are never reused, ensuring stale handles safely fail without UB.
 // ---------------------------------------------------------------------------
 namespace {
+    constexpr size_t kMaxRegistrySlots = 32;
+
+    struct StreamSlot {
+        std::atomic<jlong> handle{0};
+        std::atomic<uint64_t> generationId{0};
+        std::atomic<OboeStreamWrapper*> wrapper{nullptr};
+        std::atomic<uint32_t> activeUsers{0};
+    };
+
+    std::array<StreamSlot, kMaxRegistrySlots> gStreamSlots{};
     std::mutex gRegistryMutex;
     std::unordered_map<jlong, std::shared_ptr<OboeStreamWrapper>> gStreamRegistry;
     std::atomic<jlong> gNextHandle{1};
     std::atomic<uint64_t> gGenerationSequence{1};
+
+    // RAII reader lease for hot-path lock-free stream access
+    struct SlotLease {
+        StreamSlot *slot = nullptr;
+        OboeStreamWrapper *wrapper = nullptr;
+
+        ~SlotLease() {
+            if (slot) {
+                slot->activeUsers.fetch_sub(1, std::memory_order_release);
+            }
+        }
+    };
+
+    inline OboeStreamWrapper* getStreamValidatedLockFree(jlong handle, jlong generation, SlotLease &lease) {
+        if (handle <= 0) return nullptr;
+        const size_t preferredSlot = static_cast<size_t>(handle) % kMaxRegistrySlots;
+        for (size_t offset = 0; offset < kMaxRegistrySlots; ++offset) {
+            const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
+            auto &slot = gStreamSlots[idx];
+            if (slot.handle.load(std::memory_order_relaxed) == handle) {
+                slot.activeUsers.fetch_add(1, std::memory_order_acquire);
+                if (slot.handle.load(std::memory_order_acquire) == handle &&
+                    (generation == 0 || slot.generationId.load(std::memory_order_acquire) == static_cast<uint64_t>(generation))) {
+                    OboeStreamWrapper *w = slot.wrapper.load(std::memory_order_acquire);
+                    if (w && w->isActive.load(std::memory_order_acquire)) {
+                        lease.slot = &slot;
+                        lease.wrapper = w;
+                        return w;
+                    }
+                }
+                slot.activeUsers.fetch_sub(1, std::memory_order_release);
+                return nullptr;
+            }
+        }
+        return nullptr;
+    }
 
     std::shared_ptr<OboeStreamWrapper> getStream(jlong handle) {
         if (handle <= 0) return nullptr;
@@ -427,20 +489,25 @@ namespace {
         return nullptr;
     }
 
-    std::shared_ptr<OboeStreamWrapper> getStreamValidated(jlong handle, jlong generation) {
-        auto wrapper = getStream(handle);
-        if (!wrapper) return nullptr;
-        if (generation != 0 &&
-            static_cast<uint64_t>(generation) != wrapper->generationId) {
-            return nullptr;    // stale generation
-        }
-        return wrapper;
-    }
 
     jlong registerStream(const std::shared_ptr<OboeStreamWrapper> &wrapper) {
         const jlong handle = gNextHandle.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(gRegistryMutex);
         gStreamRegistry[handle] = wrapper;
+
+        // Publish to lock-free slot table
+        const size_t preferredSlot = static_cast<size_t>(handle) % kMaxRegistrySlots;
+        for (size_t offset = 0; offset < kMaxRegistrySlots; ++offset) {
+            const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
+            auto &slot = gStreamSlots[idx];
+            if (slot.handle.load(std::memory_order_relaxed) == 0 &&
+                slot.activeUsers.load(std::memory_order_relaxed) == 0) {
+                slot.generationId.store(wrapper->generationId, std::memory_order_relaxed);
+                slot.wrapper.store(wrapper.get(), std::memory_order_relaxed);
+                slot.handle.store(handle, std::memory_order_release);
+                break;
+            }
+        }
         return handle;
     }
 
@@ -448,14 +515,28 @@ namespace {
         std::shared_ptr<OboeStreamWrapper> toClose;
         {
             std::lock_guard<std::mutex> lock(gRegistryMutex);
+            // 1. Remove from lock-free slot table so no new writes can acquire lease
+            for (auto &slot : gStreamSlots) {
+                if (slot.handle.load(std::memory_order_relaxed) == handle) {
+                    slot.handle.store(0, std::memory_order_release);
+                    // Wait for active users in writeDirect to finish
+                    while (slot.activeUsers.load(std::memory_order_acquire) > 0) {
+                        struct timespec req = {0, 500000L}; // 0.5 ms
+                        nanosleep(&req, nullptr);
+                    }
+                    slot.wrapper.store(nullptr, std::memory_order_release);
+                    slot.generationId.store(0, std::memory_order_relaxed);
+                    break;
+                }
+            }
+
             auto it = gStreamRegistry.find(handle);
             if (it != gStreamRegistry.end()) {
                 toClose = it->second;
                 gStreamRegistry.erase(it);
             }
         }
-        // Wrapper destruction (possibly here) closes the stream; any in-flight
-        // JNI call keeps its own shared_ptr reference and finishes safely.
+        // Wrapper destruction closes the stream; any in-flight writer will safely exit
         if (toClose) {
             toClose->closeInternal();
         }
@@ -550,6 +631,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
         wrapper->closeInternal();
         return 0;
     }
+    wrapper->rawStream_.store(wrapper->stream.get(), std::memory_order_release);
 
     LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d ch=%d",
          oboe::convertToText(wrapper->stream->getAudioApi()),
@@ -593,7 +675,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         return kErrUnsupportedEncoding;
     }
 
-    auto wrapper = getStreamValidated(handle, generation);
+    SlotLease lease;
+    auto *wrapper = getStreamValidatedLockFree(handle, generation, lease);
     if (!wrapper || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
@@ -605,8 +688,13 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     }
     struct WriterGuard {
         std::atomic<bool> &flag;
-        ~WriterGuard() { flag.store(false, std::memory_order_release); }
-    } writerGuard{wrapper->isWriting_};
+        std::atomic<int32_t> &writers;
+        ~WriterGuard() {
+            flag.store(false, std::memory_order_release);
+            writers.fetch_sub(1, std::memory_order_release);
+        }
+    } writerGuard{wrapper->isWriting_, wrapper->activeWriters_};
+    wrapper->activeWriters_.fetch_add(1, std::memory_order_acquire);
 
     // Bounds validation against the real direct-buffer capacity.
     const jlong capacity = env->GetDirectBufferCapacity(directBuffer);
@@ -710,7 +798,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
             wrapper->dsp.process(scratch, numFrames, channelCount);
         }
 
-        auto activeStream = wrapper->getStreamSnapshot();
+        oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
@@ -767,7 +855,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
                                                  std::memory_order_relaxed);
     }
 
-    auto activeStream = wrapper->getStreamSnapshot();
+    oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
     if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
@@ -802,7 +890,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         return kErrBadArguments;
     }
 
-    auto wrapper = getStreamValidated(handle, /*generation*/ 0);
+    SlotLease lease;
+    auto *wrapper = getStreamValidatedLockFree(handle, /*generation*/ 0, lease);
     if (!wrapper || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
@@ -814,8 +903,13 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
     }
     struct WriterGuard {
         std::atomic<bool> &flag;
-        ~WriterGuard() { flag.store(false, std::memory_order_release); }
-    } writerGuard{wrapper->isWriting_};
+        std::atomic<int32_t> &writers;
+        ~WriterGuard() {
+            flag.store(false, std::memory_order_release);
+            writers.fetch_sub(1, std::memory_order_release);
+        }
+    } writerGuard{wrapper->isWriting_, wrapper->activeWriters_};
+    wrapper->activeWriters_.fetch_add(1, std::memory_order_acquire);
 
     const jsize arrayLength = env->GetArrayLength(audioData);
     const int32_t channelCount = wrapper->configuredChannelCount;
@@ -834,7 +928,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         if (!bypassDsp) {
             wrapper->dsp.process(data, numFrames, channelCount);
         }
-        auto activeStream = wrapper->getStreamSnapshot();
+        oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
             return kErrStaleOrWrite;
@@ -884,7 +978,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
                                                      std::memory_order_relaxed);
         }
 
-        auto activeStream = wrapper->getStreamSnapshot();
+        oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
