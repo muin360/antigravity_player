@@ -103,7 +103,9 @@ public:
     static constexpr size_t kWriteScratchFrames = 4096;
     static constexpr size_t kRingMask = kRingCapacitySamples - 1;
 
-    static constexpr size_t kMaxScratchSamples = 65536; // 32768 frames stereo (128 KB floats)
+    static constexpr size_t kMaxScratchSamples = 131072; // 131072 samples = 65536 stereo frames (512 KB floats)
+
+    std::atomic<uint64_t> audioEpoch_{1};
 
     std::vector<float> ring_;                 // preallocated at open, never resized
     std::vector<float> writeScratch_;         // preallocated at open, never resized
@@ -144,8 +146,14 @@ public:
     // Render thread only: drain staged output to hardware WITHOUT holding any
     // lock (P0-4). Data is copied into the preallocated scratch first so no
     // live pointer ever depends on mutable container state.
+    // Takes a shared_ptr snapshot so the stream object cannot be destroyed
+    // underneath an in-flight write even if closeInternal() runs concurrently.
     // Returns frames written this call; sets *stalled on fatal conditions.
-    int32_t drainRingToStream(oboe::AudioStream *s, int32_t channels, bool *stalled) {
+    int32_t drainRingToStream(const std::shared_ptr<oboe::AudioStream> &s, int32_t channels, bool *stalled) {
+        if (!s) {
+            *stalled = true;
+            return 0;
+        }
         applyClearIfRequested();
         int32_t writtenTotal = 0;
         while (true) {
@@ -187,6 +195,15 @@ public:
 
     std::mutex lifecycleMutex;
 
+    // Formally race-safe stream pointer snapshot (P0 Rule 2):
+    // Never access wrapper->stream.get() outside lifecycleMutex.
+    // Returns a shared_ptr copy whose refcount keeps the underlying AudioStream
+    // alive on the caller's stack throughout concurrent write operations.
+    std::shared_ptr<oboe::AudioStream> getStreamSnapshot() {
+        std::lock_guard<std::mutex> lock(lifecycleMutex);
+        return stream;
+    }
+
     std::atomic<bool> isActive{true};
     std::atomic<bool> isWriting_{false};
     std::atomic<int64_t> atomicFramesWritten{0};
@@ -219,6 +236,7 @@ public:
             stream = nullptr;
         }
         clearPending_.store(true, std::memory_order_release);
+        audioEpoch_.fetch_add(1, std::memory_order_release);
         hardwareFramesBaseline_.store(0, std::memory_order_relaxed);
         atomicFramesWritten.store(0, std::memory_order_relaxed);
         outputFramesProduced_.store(0, std::memory_order_relaxed);
@@ -273,6 +291,7 @@ public:
         // Render thread discards ring contents at its next call boundary
         // (P0-6.3: no pre-seek audio may survive a flush).
         clearPending_.store(true, std::memory_order_release);
+        audioEpoch_.fetch_add(1, std::memory_order_release);
         resampler.reset();          // deferred internally to the render thread
         dsp.reset();                // clear biquad delay lines and ITD buffers (Rule 15)
     }
@@ -691,7 +710,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
             wrapper->dsp.process(scratch, numFrames, channelCount);
         }
 
-        oboe::AudioStream *activeStream = wrapper->stream.get();
+        auto activeStream = wrapper->getStreamSnapshot();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
@@ -748,7 +767,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
                                                  std::memory_order_relaxed);
     }
 
-    oboe::AudioStream *activeStream = wrapper->stream.get();
+    auto activeStream = wrapper->getStreamSnapshot();
     if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
     }
@@ -815,7 +834,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
         if (!bypassDsp) {
             wrapper->dsp.process(data, numFrames, channelCount);
         }
-        oboe::AudioStream *activeStream = wrapper->stream.get();
+        auto activeStream = wrapper->getStreamSnapshot();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
             return kErrStaleOrWrite;
@@ -865,7 +884,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
                                                      std::memory_order_relaxed);
         }
 
-        oboe::AudioStream *activeStream = wrapper->stream.get();
+        auto activeStream = wrapper->getStreamSnapshot();
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
@@ -924,14 +943,21 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getPlaybackTimestampUs(
     return wrapper ? static_cast<jlong>(wrapper->getPlaybackTimestampUs()) : 0L;
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStreamEpoch(
+    JNIEnv *env, jobject thiz, jlong handle) {
+    auto wrapper = getStream(handle);
+    return wrapper ? static_cast<jlong>(wrapper->audioEpoch_.load(std::memory_order_relaxed)) : 0L;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_getSampleRate(
     JNIEnv *env, jobject thiz, jlong handle) {
     auto wrapper = getStream(handle);
     if (!wrapper) return 0;
-    std::lock_guard<std::mutex> lock(wrapper->lifecycleMutex);
-    return wrapper->stream ? wrapper->stream->getSampleRate()
-                           : wrapper->actualRate.load(std::memory_order_relaxed);
+    auto s = wrapper->getStreamSnapshot();
+    return s ? s->getSampleRate()
+             : wrapper->actualRate.load(std::memory_order_relaxed);
 }
 
 JNIEXPORT jboolean JNICALL
@@ -939,9 +965,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_isExclusive(
     JNIEnv *env, jobject thiz, jlong handle) {
     auto wrapper = getStream(handle);
     if (!wrapper) return JNI_FALSE;
-    std::lock_guard<std::mutex> lock(wrapper->lifecycleMutex);
-    return (wrapper->stream &&
-            wrapper->stream->getSharingMode() == oboe::SharingMode::Exclusive)
+    auto s = wrapper->getStreamSnapshot();
+    return (s && s->getSharingMode() == oboe::SharingMode::Exclusive)
                ? JNI_TRUE : JNI_FALSE;
 }
 

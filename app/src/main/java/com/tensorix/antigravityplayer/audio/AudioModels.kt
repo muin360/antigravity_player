@@ -55,6 +55,7 @@ enum class EvidenceSource {
     ANDROID_AUDIO_DEVICE,
     AUDIO_TRACK,
     OBOE_STREAM,
+    DSP_ENGINE,
     USB_DESCRIPTOR,
     HAL_PARAMETER,
     VENDOR_API,

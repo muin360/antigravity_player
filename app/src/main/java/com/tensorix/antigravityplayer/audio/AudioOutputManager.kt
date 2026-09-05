@@ -96,7 +96,7 @@ class AudioOutputManager(
 
     init {
         updateCache()
-        if (registerSystemListeners && true&& deviceCallback != null) {
+        if (registerSystemListeners && deviceCallback != null) {
             audioManager.registerAudioDeviceCallback(deviceCallback, null)
         }
 
@@ -150,7 +150,7 @@ class AudioOutputManager(
         if (registerSystemListeners) runCatching {
             context.unregisterReceiver(usbReceiver)
         }
-        if (registerSystemListeners && true&& deviceCallback != null) {
+        if (registerSystemListeners && deviceCallback != null) {
             audioManager.unregisterAudioDeviceCallback(deviceCallback)
         }
     }
@@ -197,13 +197,8 @@ class AudioOutputManager(
             for ((_, device) in deviceList) {
                 val isAudio = isUsbAudioDevice(device)
                 if (isAudio) {
-                    val mfgName = if (true) {
-                        runCatching { device.manufacturerName }.getOrNull()
-                    } else null
-
-                    val prodName = if (true) {
-                        runCatching { device.productName }.getOrNull()
-                    } else null
+                    val mfgName = runCatching { device.manufacturerName }.getOrNull()
+                    val prodName = runCatching { device.productName }.getOrNull()
                     
                     val interfaceCount = device.interfaceCount
                     val deviceClass = device.deviceClass
@@ -265,14 +260,28 @@ class AudioOutputManager(
     }
 
     fun scanOutputStateInternal(trackInfo: AudioTrackInfo? = null, isDspActive: Boolean = true): AudioOutputState {
-        // Memo gate (Phase 13): identical inputs reuse the last computed state
-        // so playback-state transitions stop re-running vendor probes and the
-        // canonical verification pipeline.
+        // Memo gate (P0 Rule 17): comprehensive invalidation key containing all
+        // runtime parameters capable of altering the canonical verification state.
         val nativeInfoNow = OboeAudioSink.currentStreamInfo
+        val activeHandle = OboeAudioSink.currentActiveHandle
+        val service = PlaybackService.instance
+        val bitPerfectRequested = service?.bitPerfectMode?.value ?: false
+        val dspBypass = service?.dspProcessor?.isBitPerfectBypass ?: false
         val key = listOf(
             trackInfo?.title, trackInfo?.artist, trackInfo?.sampleRateHz,
             trackInfo?.bitDepth, trackInfo?.codec, isDspActive,
+            activeHandle,
             nativeInfoNow?.deviceId, nativeInfoNow?.sharingMode,
+            nativeInfoNow?.streamGeneration,
+            nativeInfoNow?.sampleRate,
+            nativeInfoNow?.channelCount,
+            nativeInfoNow?.formatId,
+            nativeInfoNow?.sharingModeId,
+            nativeInfoNow?.performanceModeId,
+            nativeInfoNow?.stateId,
+            nativeInfoNow?.underrunCount,
+            bitPerfectRequested,
+            dspBypass,
             cachedRoutes.size
         )
         if (key == memoKey) return memoState ?: scanOutputStateUncached(trackInfo, isDspActive)

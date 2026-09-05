@@ -7,7 +7,9 @@ namespace antigravity {
 static constexpr double M_PI_VAL = 3.14159265358979323846;
 
 AudiophileResampler::AudiophileResampler() {
-    historyBuffer_.assign(MAX_HISTORY_FRAMES * 2, 0.0f);
+    historyBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES) * MAX_CHANNELS, 0.0f);
+    workBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES + MAX_INPUT_FRAMES) * MAX_CHANNELS, 0.0f);
+    outputBuffer_.assign(static_cast<size_t>(MAX_OUTPUT_FRAMES) * MAX_CHANNELS, 0.0f);
 }
 
 std::shared_ptr<const AudiophileResampler::Config> AudiophileResampler::buildConfig(
@@ -15,7 +17,7 @@ std::shared_ptr<const AudiophileResampler::Config> AudiophileResampler::buildCon
     ResampleQuality quality, uint64_t generation) {
 
     auto cfg = std::make_shared<Config>();
-    cfg->channelCount = std::max(1, channelCount);
+    cfg->channelCount = std::clamp(channelCount, 1, MAX_CHANNELS);
     cfg->quality = quality;
     const double inRate = std::max(1.0, static_cast<double>(inSampleRate));
     const double outRate = std::max(1.0, static_cast<double>(outSampleRate));
@@ -99,10 +101,10 @@ void AudiophileResampler::reset() {
 
 void AudiophileResampler::migrateTo(const Config &cfg) {
     timePos_ = 0.0;
-    const size_t ch = static_cast<size_t>(std::max(1, cfg.channelCount));
-    historyBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES) * ch, 0.0f);
-    workBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES + MAX_INPUT_FRAMES) * ch, 0.0f);
-    outputBuffer_.assign(static_cast<size_t>(MAX_OUTPUT_FRAMES) * ch, 0.0f);
+    // Zero-allocation: preallocated for MAX_CHANNELS in constructor, zero active slice only
+    const size_t ch = static_cast<size_t>(std::clamp(cfg.channelCount, 1, MAX_CHANNELS));
+    const size_t activeHistorySamples = static_cast<size_t>(MAX_HISTORY_FRAMES) * ch;
+    std::fill(historyBuffer_.begin(), historyBuffer_.begin() + activeHistorySamples, 0.0f);
 }
 
 AudiophileResampler::Result AudiophileResampler::process(
@@ -115,17 +117,18 @@ AudiophileResampler::Result AudiophileResampler::process(
     if (!cfg) { result.inputFramesConsumed = 0; return result; }
 
     if (cfg != active_) {
-        migrateTo(*cfg);   // one-time state migration on the render thread
+        migrateTo(*cfg);   // one-time state migration on the render thread (allocation-free)
         active_ = cfg;
         activeGeneration_ = cfg->generation;
     }
 
+    const int32_t ch = std::clamp(cfg->channelCount, 1, MAX_CHANNELS);
+
     if (resetRequested_.exchange(false, std::memory_order_acq_rel)) {
         timePos_ = 0.0;
-        std::fill(historyBuffer_.begin(), historyBuffer_.end(), 0.0f);
+        const size_t activeHistorySamples = static_cast<size_t>(MAX_HISTORY_FRAMES) * static_cast<size_t>(ch);
+        std::fill(historyBuffer_.begin(), historyBuffer_.begin() + activeHistorySamples, 0.0f);
     }
-
-    const int32_t ch = cfg->channelCount;
 
     if (cfg->passThrough) {
         // Direct zero-copy pass-through: caller receives the exact input pointer
@@ -143,11 +146,12 @@ AudiophileResampler::Result AudiophileResampler::process(
     const int halfTaps = cfg->halfTaps;
 
     const int32_t historyFrames = MAX_HISTORY_FRAMES;
+    const size_t historySamples = static_cast<size_t>(historyFrames) * static_cast<size_t>(ch);
     const int32_t totalWorkFrames = historyFrames + clampedInFrames;
 
-    std::copy(historyBuffer_.begin(), historyBuffer_.end(), workBuffer_.begin());
+    std::copy(historyBuffer_.begin(), historyBuffer_.begin() + historySamples, workBuffer_.begin());
     std::copy(inData, inData + static_cast<size_t>(clampedInFrames) * ch,
-              workBuffer_.begin() + historyBuffer_.size());
+              workBuffer_.begin() + historySamples);
 
     int32_t outFrameCount = 0;
     const int32_t maxOutFrames = MAX_OUTPUT_FRAMES;

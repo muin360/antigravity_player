@@ -84,10 +84,14 @@ object BitPerfectVerifier {
         }
 
         // 7. Actual sharing mode is Exclusive (for USB/Wired direct path)
-        val isExclusive = snapshot.sharingMode.value == "EXCLUSIVE" || snapshot.directPathActive.value
+        // Rule 13: Never use 'EXCLUSIVE || directPathActive' - they are separate facts.
+        val isExclusive = snapshot.sharingMode.value == "EXCLUSIVE"
         evidence.add(BitPerfectEvidence("Exclusive Mode", isExclusive, snapshot.sharingMode.source))
         if (!isExclusive) {
             failureReasons.add("Stream is operating in shared mixer mode")
+        }
+        if (snapshot.sharingMode.confidence != Confidence.VERIFIED) {
+            hasUnknownOrInferredCritical = true
         }
 
         // 8. Actual output sample rate known and verified
@@ -96,6 +100,8 @@ object BitPerfectVerifier {
         evidence.add(BitPerfectEvidence("Output Rate Known", outputRateKnown, snapshot.actualOutput.sampleRate.source))
         if (!outputRateKnown) {
             failureReasons.add("Actual hardware output sample rate is unknown or unverified")
+            hasUnknownOrInferredCritical = true
+        } else if (snapshot.actualOutput.sampleRate.confidence != Confidence.VERIFIED) {
             hasUnknownOrInferredCritical = true
         }
 
@@ -120,6 +126,8 @@ object BitPerfectVerifier {
         evidence.add(BitPerfectEvidence("Output Channels Known", outputChannelsKnown, snapshot.actualOutput.channels.source))
         if (!outputChannelsKnown) {
             failureReasons.add("Actual hardware output channel count is unknown")
+            hasUnknownOrInferredCritical = true
+        } else if (snapshot.actualOutput.channels.confidence != Confidence.VERIFIED) {
             hasUnknownOrInferredCritical = true
         }
 
@@ -305,9 +313,9 @@ object BitPerfectVerifier {
         evidence.add(BitPerfectEvidence("Direct Path Active", directActive, snapshot.directPathActive.source))
         if (!directActive) {
             failureReasons.add("Direct PCM HAL path is not actively confirmed")
-            if (snapshot.directPathActive.confidence == Confidence.UNKNOWN) {
-                hasUnknownOrInferredCritical = true
-            }
+            hasUnknownOrInferredCritical = true
+        } else if (snapshot.directPathActive.confidence != Confidence.VERIFIED) {
+            hasUnknownOrInferredCritical = true
         }
 
         // 33. Mixer state is definitely not active

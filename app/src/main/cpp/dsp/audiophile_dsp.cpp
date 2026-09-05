@@ -18,9 +18,9 @@ AudiophileDsp::AudiophileDsp() {
     // params_ starts fully neutral (see header). Build the initial filter set
     // synchronously: no render thread exists yet, so direct access is safe.
     buildFilterSet(sampleRate_);
-    peqActive_.clear();
-    peqFiltersL_.clear();
-    peqFiltersR_.clear();
+    peqActiveCount_ = 0;
+    for (auto &b : peqFiltersL_) b.reset();
+    for (auto &b : peqFiltersR_) b.reset();
     resetRenderStateOnly();
 }
 
@@ -291,22 +291,33 @@ void AudiophileDsp::applyCoefficientSync() {
         syncNeeded = true;
     }
 
-    // Copy the PEQ draft while we hold the lock; rebuild outside it below.
-    std::vector<PeqBandParams> specs = peqDraft_;
+    // Copy the PEQ draft into fixed storage while holding the lock (zero allocation)
+    std::array<PeqBandParams, kMaxPeqBands> specs{};
+    const size_t specsCount = std::min(peqDraft_.size(), kMaxPeqBands);
+    for (size_t i = 0; i < specsCount; ++i) {
+        specs[i] = peqDraft_[i];
+    }
 
     lk.unlock();
 
     if (resetNeeded) {
         resetRenderStateOnly();
     }
-    if (specs.size() != peqActive_.size() ||
-        !std::equal(specs.begin(), specs.end(), peqActive_.begin(),
-                    [](const PeqBandParams &a, const PeqBandParams &b) {
-                        return a.enabled == b.enabled && a.type == b.type &&
-                               a.frequency == b.frequency && a.q == b.q &&
-                               a.gainDb == b.gainDb;
-                    })) {
-        rebuildPeqFilters(specs);
+    bool peqDiffers = (specsCount != peqActiveCount_);
+    if (!peqDiffers) {
+        for (size_t i = 0; i < specsCount; ++i) {
+            const auto &a = specs[i];
+            const auto &b = peqActive_[i];
+            if (a.enabled != b.enabled || a.type != b.type ||
+                a.frequency != b.frequency || a.q != b.q ||
+                a.gainDb != b.gainDb) {
+                peqDiffers = true;
+                break;
+            }
+        }
+    }
+    if (peqDiffers) {
+        rebuildPeqFilters(specs, specsCount);
     }
     if (syncNeeded) {
         buildFilterSet(sampleRate_);
@@ -331,15 +342,10 @@ void AudiophileDsp::configureBiquad(BiquadFilter &f, FilterType type,
     }
 }
 
-void AudiophileDsp::rebuildPeqFilters(const std::vector<PeqBandParams> &specs) {
-    peqActive_ = specs;
-    if (peqFiltersL_.size() != specs.size()) {
-        // Allocation happens only when the user adds/removes bands (rare),
-        // never during steady-state playback.
-        peqFiltersL_ = std::vector<BiquadFilter>(specs.size());
-        peqFiltersR_ = std::vector<BiquadFilter>(specs.size());
-    }
-    for (size_t i = 0; i < specs.size(); ++i) {
+void AudiophileDsp::rebuildPeqFilters(const std::array<PeqBandParams, kMaxPeqBands> &specs, size_t count) {
+    peqActiveCount_ = std::min(count, kMaxPeqBands);
+    for (size_t i = 0; i < peqActiveCount_; ++i) {
+        peqActive_[i] = specs[i];
         configureBiquad(peqFiltersL_[i], specs[i].type, specs[i].frequency,
                         specs[i].q, specs[i].gainDb, sampleRate_);
         configureBiquad(peqFiltersR_[i], specs[i].type, specs[i].frequency,
@@ -397,7 +403,7 @@ void AudiophileDsp::buildFilterSet(double fs) {
     hrtfPinnaNotchL_.setNotch(6200.0, 3.5, fs);
     hrtfPinnaNotchR_.setNotch(6200.0, 3.5, fs);
 
-    rebuildPeqFilters(peqActive_);
+    rebuildPeqFilters(peqActive_, peqActiveCount_);
 }
 
 void AudiophileDsp::resetRenderStateOnly() {
@@ -514,6 +520,15 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     double runningMaxL = 0.0, runningMaxR = 0.0;
     double sumLR = 0.0, sumL2 = 0.0, sumR2 = 0.0;
 
+    bool hasEqGain = false;
+    for (size_t b = 0; b < kNumBands; ++b) {
+        if (p.bandGainsDb[b] != 0.0) { hasEqGain = true; break; }
+    }
+    const bool hasActiveProcessing = shapingStageEngaged || (clarityGain != 0.0) ||
+        (p.bassBoostGainDb != 0.0) || (p.trebleGainDb != 0.0) || (p.preAmpGainDb != 0.0) ||
+        (peqActiveCount_ > 0) || (crossfeed > 0.0) || p.subBassMonoActive ||
+        (airGain != 0.0) || p.spatialActive || hasEqGain;
+
     for (int32_t frame = 0; frame < numFrames; ++frame) {
         const int32_t baseIdx = frame * channelCount;
         double sL = static_cast<double>(audioData[baseIdx]);
@@ -573,9 +588,12 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
             }
         }
 
-        // 3. DC removal / blocking (always-on safety, transparent for music).
-        sL = dcBlockerL_.process(dcRemovalL_.process(sL));
-        sR = dcBlockerR_.process(dcRemovalR_.process(sR));
+        // 3. DC removal / blocking: engaged only when active processing is present,
+        // preserving exact mathematical identity in transparent mode (P0 Rule 18).
+        if (hasActiveProcessing) {
+            sL = dcBlockerL_.process(dcRemovalL_.process(sL));
+            sR = dcBlockerR_.process(dcRemovalR_.process(sR));
+        }
 
         // 4. Clarity presence peak
         if (clarityGain != 0.0) {
@@ -597,13 +615,11 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
             }
         }
 
-        // 7. Parametric EQ bands (render-owned states: no locking, no skips)
-        if (!peqFiltersL_.empty()) {
-            for (size_t i = 0; i < peqFiltersL_.size(); ++i) {
-                if (peqActive_[i].enabled) {
-                    sL = peqFiltersL_[i].process(sL);
-                    sR = peqFiltersR_[i].process(sR);
-                }
+        // 7. Parametric EQ bands (render-owned states: no locking, no skips, zero allocation)
+        for (size_t i = 0; i < peqActiveCount_; ++i) {
+            if (peqActive_[i].enabled) {
+                sL = peqFiltersL_[i].process(sL);
+                sR = peqFiltersR_[i].process(sR);
             }
         }
 

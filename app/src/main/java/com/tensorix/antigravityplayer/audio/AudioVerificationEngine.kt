@@ -51,12 +51,12 @@ object AudioVerificationEngine {
             encoding = AudioEvidence("PCM_FLOAT", EvidenceSource.AUDIO_TRACK, Confidence.HIGH_CONFIDENCE)
         )
 
-        // 3. Processing Format
+        // 3. Processing Format (Internal 64-bit double-precision DSP calculations)
         val processing = AudioFormatSnapshot(
-            sampleRate = AudioEvidence(source.sampleRate.value, EvidenceSource.OBOE_STREAM, source.sampleRate.confidence),
-            bitDepth = AudioEvidence(64, EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
-            channels = AudioEvidence(source.channels.value, EvidenceSource.OBOE_STREAM, source.channels.confidence),
-            encoding = AudioEvidence("FLOAT64", EvidenceSource.OBOE_STREAM, Confidence.VERIFIED)
+            sampleRate = AudioEvidence(source.sampleRate.value, EvidenceSource.DSP_ENGINE, source.sampleRate.confidence),
+            bitDepth = AudioEvidence(64, EvidenceSource.DSP_ENGINE, Confidence.VERIFIED),
+            channels = AudioEvidence(source.channels.value, EvidenceSource.DSP_ENGINE, source.channels.confidence),
+            encoding = AudioEvidence("DSP_DOUBLE_PRECISION", EvidenceSource.DSP_ENGINE, Confidence.VERIFIED)
         )
 
         // 4. Requested Output Format
@@ -133,7 +133,7 @@ object AudioVerificationEngine {
         val isMixerActive = !isDirectActive
         val mixerPathState = when {
             isDirectActive -> MixerPathState.DIRECT_ACTIVE
-            hardwareReport.isVendorHiFiActive -> MixerPathState.OFFLOAD_ACTIVE
+            hardwareReport.isVendorHiFiActive && hardwareReport.isDirectOutputActive -> MixerPathState.DIRECT_ACTIVE
             else -> MixerPathState.MIXER_ACTIVE
         }
 

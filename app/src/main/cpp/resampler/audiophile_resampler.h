@@ -16,6 +16,7 @@ enum class ResampleQuality {
 
 class AudiophileResampler {
 public:
+    static constexpr int32_t MAX_CHANNELS = 8;
     static constexpr int32_t MAX_INPUT_FRAMES = 8192;
     static constexpr int32_t MAX_HISTORY_FRAMES = 128;
     // Support upsampling up to 384 kHz (8.7x). Sized for up to 8 channels.

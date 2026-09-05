@@ -22,6 +22,7 @@ object OboeBridge {
     // Core Stream Lifecycle
     external fun openStream(sampleRate: Int, channelCount: Int, bitPerfectMode: Boolean, deviceId: Int = 0): Long
     external fun getStreamGeneration(handle: Long): Long
+    external fun getStreamEpoch(handle: Long): Long
     external fun writeDirect(
         handle: Long,
         generation: Long,

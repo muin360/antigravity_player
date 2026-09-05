@@ -318,6 +318,58 @@ class BitPerfectVerifierTest {
         assertTrue(result.failureReasons.any { it.contains("DSD 1-bit bitstream is decimated to PCM") })
     }
 
+    @Test
+    fun `REGRESSION TEST - SHARED + DIRECT_ACTIVE yields UNAVAILABLE and never VERIFIED (Rule 13)`() {
+        val snapshot = createBaseSnapshot().copy(
+            sharingMode = AudioEvidence("SHARED", EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
+            directPathActive = AudioEvidence(true, EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
+            mixerPathActive = AudioEvidence(false, EvidenceSource.HAL_PARAMETER, Confidence.VERIFIED)
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.UNAVAILABLE, result.state)
+        assertFalse("SHARED mode must never yield VERIFIED", result.state == BitPerfectState.VERIFIED)
+        assertTrue(result.failureReasons.any { it.contains("shared mixer mode") })
+    }
+
+    @Test
+    fun `REGRESSION TEST - EXCLUSIVE + DIRECT_FALSE yields UNAVAILABLE and never VERIFIED (Rule 13)`() {
+        val snapshot = createBaseSnapshot().copy(
+            sharingMode = AudioEvidence("EXCLUSIVE", EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
+            directPathActive = AudioEvidence(false, EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
+            mixerPathActive = AudioEvidence(false, EvidenceSource.HAL_PARAMETER, Confidence.VERIFIED)
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.UNAVAILABLE, result.state)
+        assertFalse("DIRECT_FALSE must never yield VERIFIED", result.state == BitPerfectState.VERIFIED)
+        assertTrue(result.failureReasons.any { it.contains("Direct PCM HAL path is not actively confirmed") })
+    }
+
+    @Test
+    fun `REGRESSION TEST - HIGH_CONFIDENCE on direct path yields ACTIVE_UNVERIFIED and never VERIFIED (Rule 14)`() {
+        val snapshot = createBaseSnapshot().copy(
+            sharingMode = AudioEvidence("EXCLUSIVE", EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
+            directPathActive = AudioEvidence(true, EvidenceSource.HAL_PARAMETER, Confidence.HIGH_CONFIDENCE),
+            mixerPathActive = AudioEvidence(false, EvidenceSource.HAL_PARAMETER, Confidence.VERIFIED)
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.ACTIVE_UNVERIFIED, result.state)
+        assertFalse("HIGH_CONFIDENCE must never yield VERIFIED", result.state == BitPerfectState.VERIFIED)
+    }
+
+    @Test
+    fun `REGRESSION TEST - HIGH_CONFIDENCE on output rate yields ACTIVE_UNVERIFIED and never VERIFIED (Rule 14)`() {
+        val snapshot = createBaseSnapshot().copy(
+            actualOutput = createFormat(44100, 16, 2, "PCM", Confidence.HIGH_CONFIDENCE)
+        )
+        val result = BitPerfectVerifier.verify(snapshot, createBaseDsp(), isHrtfEnabled = false, isBitPerfectRequested = true)
+
+        assertEquals(BitPerfectState.ACTIVE_UNVERIFIED, result.state)
+        assertFalse("Inferred/High-Confidence rate must never yield VERIFIED", result.state == BitPerfectState.VERIFIED)
+    }
+
     private fun createBaseSnapshot(): CanonicalAudioRuntimeSnapshot {
         return CanonicalAudioRuntimeSnapshot(
             source = createFormat(44100, 16, 2, "FLAC"),

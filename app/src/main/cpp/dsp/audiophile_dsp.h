@@ -157,10 +157,12 @@ private:
     }
 
     void readParams(DspParams &out);       // render thread
+    static constexpr size_t kMaxPeqBands = 32;
+
     void enqueueCommand(const Command &cmd);
     void applyCoefficientSync();           // render thread, block boundary
     void buildFilterSet(double fs);        // render thread, helper of the above
-    void rebuildPeqFilters(const std::vector<PeqBandParams> &specs); // render thread
+    void rebuildPeqFilters(const std::array<PeqBandParams, kMaxPeqBands> &specs, size_t count); // render thread
     void resetRenderStateOnly();           // render thread (or pre-render ctor)
     double nextRandomDouble();             // render thread
     static void configureBiquad(BiquadFilter &f, FilterType type,
@@ -202,9 +204,10 @@ private:
     BiquadFilter hrtfHeadShadowL_, hrtfHeadShadowR_;
     BiquadFilter hrtfPinnaNotchL_, hrtfPinnaNotchR_;
 
-    std::vector<PeqBandParams> peqActive_;     // copied spec set
-    std::vector<BiquadFilter> peqFiltersL_;    // parallel runtime states
-    std::vector<BiquadFilter> peqFiltersR_;
+    size_t peqActiveCount_ = 0;
+    std::array<PeqBandParams, kMaxPeqBands> peqActive_{};     // fixed preallocated spec set
+    std::array<BiquadFilter, kMaxPeqBands> peqFiltersL_{};    // fixed parallel runtime states
+    std::array<BiquadFilter, kMaxPeqBands> peqFiltersR_{};
 
     // Oversampling history (interpolated waveshaping stage)
     std::array<double, 4> osSamplesL_{};

@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.core.content.edit
 import com.tensorix.antigravityplayer.audio.HiFiBadgeState
 import com.tensorix.antigravityplayer.audio.HardwareHiFiVerifier
+import com.tensorix.antigravityplayer.audio.OboeBridge
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -81,7 +82,11 @@ class PlaybackService : MediaSessionService() {
         val hiFiSupportedState: StateFlow<Boolean> = _hiFiSupportedState.asStateFlow()
 
         fun isHiFiSupported(): Boolean {
-            return true
+            return _hiFiSupportedState.value || OboeBridge.isAvailable
+        }
+
+        fun updateHiFiSupported(supported: Boolean) {
+            _hiFiSupportedState.value = supported
         }
     }
 
@@ -143,12 +148,13 @@ class PlaybackService : MediaSessionService() {
         equalizerEngine?.setDspProcessor(dspProcessor)
         autoEqEngine = com.tensorix.antigravityplayer.audio.AutoEqEngine(applicationContext)
 
+        val hifiSupported = OboeBridge.isAvailable && HardwareHiFiVerifier.isHiFiCapable(applicationContext)
+        _hiFiSupportedState.value = hifiSupported
+
         // Generate persistent audio session ID to notify Android AudioPolicy / OEM Hi-Fi service
-        if (true) {
-            val generatedSessionId = audioManager.generateAudioSessionId()
-            if (generatedSessionId != 0) {
-                VendorDacManager.onAudioSessionOpened(applicationContext, generatedSessionId)
-            }
+        val generatedSessionId = audioManager.generateAudioSessionId()
+        if (generatedSessionId != 0) {
+            VendorDacManager.onAudioSessionOpened(applicationContext, generatedSessionId)
         }
 
         // Retain settings from preferences

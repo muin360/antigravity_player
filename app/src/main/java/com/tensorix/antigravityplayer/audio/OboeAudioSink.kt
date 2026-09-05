@@ -69,6 +69,10 @@ class OboeAudioSink(
         private const val RET_ERROR_UNSUPPORTED_ENCODING = -2
         private const val RET_ERROR_BAD_ARGUMENTS = -3
 
+        // Authoritative maximum scratch samples matching native kMaxScratchSamples (oboe_bridge.cpp)
+        const val MAX_SCRATCH_SAMPLES = 131072
+        const val DIRECT_BUFFER_CAPACITY = 262144
+
         @Volatile
         @JvmStatic
         var currentActiveHandle: Long = 0L
@@ -202,14 +206,25 @@ class OboeAudioSink(
         fallbackSink?.setClock(clock)
     }
 
+    private val supportedPcmEncodings = setOf(
+        C.ENCODING_PCM_8BIT,
+        C.ENCODING_PCM_16BIT,
+        C.ENCODING_PCM_24BIT,
+        C.ENCODING_PCM_32BIT,
+        C.ENCODING_PCM_FLOAT
+    )
+
     override fun supportsFormat(format: Format): Boolean {
         val fb = fallbackSink
         if (fb != null) return fb.supportsFormat(format)
-        return Util.isEncodingLinearPcm(format.pcmEncoding)
+        return format.pcmEncoding in supportedPcmEncodings &&
+               format.channelCount in 1..8 &&
+               format.sampleRate > 0
     }
 
     override fun getFormatSupport(format: Format): Int {
-        
+        val fb = fallbackSink
+        if (fb != null) return fb.getFormatSupport(format)
         return if (supportsFormat(format)) AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY else AudioSink.SINK_FORMAT_UNSUPPORTED
     }
 
@@ -445,6 +460,8 @@ class OboeAudioSink(
         val bytesPerSample = when (pcmEncoding) {
             C.ENCODING_PCM_FLOAT, C.ENCODING_PCM_32BIT -> 4
             C.ENCODING_PCM_24BIT -> 3
+            C.ENCODING_PCM_8BIT -> 1
+            C.ENCODING_PCM_16BIT -> 2
             else -> 2
         }
 
@@ -464,28 +481,32 @@ class OboeAudioSink(
             return true
         }
 
+        // Authoritative chunk bounds: never exceed native scratch or preallocated direct buffer
+        val maxFramesFromScratch = MAX_SCRATCH_SAMPLES / channelCount.coerceAtLeast(1)
+        val maxFramesFromDirectBuffer = DIRECT_BUFFER_CAPACITY / bytesPerFrame
+        val maxAllowedFrames = minOf(maxFramesFromScratch, maxFramesFromDirectBuffer)
+        val framesToWrite = minOf(numFrames, maxAllowedFrames)
+        val bytesToWrite = framesToWrite * bytesPerFrame
+
         seekState = SeekState.WRITING
 
-        // ---- Lock-free PCM write (P0-3) ----
+        // ---- Lock-free PCM write (P0-3) bounded to scratch capacity (P0-3) ----
         val framesWrittenResult = if (buffer.isDirect) {
             OboeBridge.writeDirect(
                 handle = handleSnapshot,
                 generation = generationSnapshot,
                 directBuffer = buffer,
                 offsetBytes = initialPosition,
-                numBytes = usableBytes,
-                numFrames = numFrames,
+                numBytes = bytesToWrite,
+                numFrames = framesToWrite,
                 pcmEncoding = pcmEncoding,
                 isBitPerfect = bitPerfectMode
             )
         } else {
-            val maxAlignedBytes = directByteBuffer.capacity() - (directByteBuffer.capacity() % bytesPerFrame)
-            val chunkBytes = usableBytes.coerceAtMost(maxAlignedBytes)
-            val chunkFrames = chunkBytes / bytesPerFrame
             directByteBuffer.clear()
             val slice = buffer.duplicate()
             slice.position(initialPosition)
-            slice.limit(initialPosition + chunkBytes)
+            slice.limit(initialPosition + bytesToWrite)
             directByteBuffer.put(slice)
             directByteBuffer.flip()
 
@@ -494,8 +515,8 @@ class OboeAudioSink(
                 generation = generationSnapshot,
                 directBuffer = directByteBuffer,
                 offsetBytes = 0,
-                numBytes = chunkBytes,
-                numFrames = chunkFrames,
+                numBytes = bytesToWrite,
+                numFrames = framesToWrite,
                 pcmEncoding = pcmEncoding,
                 isBitPerfect = bitPerfectMode
             )
