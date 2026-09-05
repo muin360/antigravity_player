@@ -128,9 +128,6 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         set(value) { field = value; rebuildSnapshot() }
 
     @Volatile
-    var dynamicLoudnessEnabled: Boolean = false
-
-    @Volatile
     var crossfeedLevel: Double = 0.0
         set(value) { field = value; rebuildSnapshot() }
 
@@ -244,6 +241,12 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
     val isAirPresenceActive: Boolean
         get() = activeSnapshot.let { snap -> snap.isEnabled && !snap.isBitPerfectBypass && snap.airPresenceGainDb > 0.01 }
+
+    val isReplayGainActive: Boolean
+        get() = activeSnapshot.let { snap ->
+            snap.isEnabled && !snap.isBitPerfectBypass &&
+                (snap.replayGainMultiplier < 0.999 || snap.replayGainMultiplier > 1.001)
+        }
 
     private val bandGainsDb = DoubleArray(10)
     private val bandCenterFreqs = doubleArrayOf(31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
@@ -507,7 +510,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                 }
 
                 if (nonlinearEngaged) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         val history = if (ch == 0) osSamplesL else osSamplesR
 
                         history[0] = history[1]
@@ -557,20 +560,20 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                 }
 
                 if (clarityGainLocal != 0.0) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         frameSamples[ch] = if (ch == 0) clarityFilterL.process(frameSamples[ch]) else clarityFilterR.process(frameSamples[ch])
                     }
                 }
 
                 if (bassLocal != 0.0) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         frameSamples[ch] = if (ch == 0) bassShelfL.process(frameSamples[ch]) else bassShelfR.process(frameSamples[ch])
                     }
                 }
 
                 for (i in snap.bandGainsDb.indices) {
                     if (snap.bandGainsDb[i] != 0.0) {
-                        for (ch in 0 until channelCount) {
+                        for (ch in 0 until minOf(channelCount, 2)) {
                             frameSamples[ch] = if (ch == 0) biquadsL[i].process(frameSamples[ch]) else biquadsR[i].process(frameSamples[ch])
                         }
                     }
@@ -610,19 +613,19 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                 }
 
                 if (trebleLocal != 0.0) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         frameSamples[ch] = if (ch == 0) trebleShelfL.process(frameSamples[ch]) else trebleShelfR.process(frameSamples[ch])
                     }
                 }
 
                 if (airGainLocal != 0.0) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         frameSamples[ch] = if (ch == 0) airFilterL.process(frameSamples[ch]) else airFilterR.process(frameSamples[ch])
                     }
                 }
 
                 if (nonlinearEngaged) {
-                    for (ch in 0 until channelCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
                         frameSamples[ch] = if (ch == 0) aaFilterL.process(frameSamples[ch]) else aaFilterR.process(frameSamples[ch])
                     }
                 }

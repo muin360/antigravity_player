@@ -353,7 +353,9 @@ class PlaybackService : MediaSessionService() {
                             val multiplier = currentConfig.bufferSizeMultiplier.coerceAtLeast(1)
                             val baseSize = maxOf(minBufferSizeInBytes, hardwareAlignedMin) * multiplier
                             
-                            val directBuffer = VendorDacManager.getDirectBufferSize(sampleRate, 2, if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2)
+                            val bytesPerSample = if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2
+                            val dynamicChannels = if (pcmFrameSize > 0) (pcmFrameSize / bytesPerSample).coerceAtLeast(1) else 2
+                            val directBuffer = VendorDacManager.getDirectBufferSize(sampleRate, dynamicChannels, bytesPerSample)
                             return maxOf(baseSize, minBufferSizeInBytes, directBuffer)
                         }
                     }
@@ -504,6 +506,7 @@ class PlaybackService : MediaSessionService() {
         } else {
             dspProcessor.replayGainMultiplier = 1.0
         }
+        equalizerEngine?.syncWithNativeDsp()
         refreshAudiophileState(info)
     }
 
@@ -518,6 +521,9 @@ class PlaybackService : MediaSessionService() {
             HiFiBadgeState.updateFromSnapshot(canon)
             AudioEngine.updateSnapshot(applicationContext, trackInfo, isDspActive)
         }
+
+        val streamInfo = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentStreamInfo
+        _oboeMode.value = if (activeOboeAudioSink != null && streamInfo != null) streamInfo.sharingMode else if (OboeBridge.isAvailable) "SHARED" else "UNAVAILABLE"
         
         // Auto-switch profile and Listening Mode based on dynamic route engine.
         // Phase 13 dedupe: apply ONLY when the effective route type actually

@@ -368,7 +368,6 @@ fun MainAppScreen(
                 1 -> PlaylistsScreen(
                     playlistsWithSongs = playlistsWithSongs,
                     currentSong = currentSong,
-                    isPlaying = isPlaying,
                     onCreatePlaylist = { viewModel.createPlaylist(it) },
                     onDeletePlaylist = { viewModel.deletePlaylist(it) },
                     onRemoveSongFromPlaylist = { playlistId, songId -> viewModel.removeSongFromPlaylist(playlistId, songId) },
@@ -389,15 +388,12 @@ fun MainAppScreen(
                 3 -> SettingsScreen(
                     totalTracksCount = songs.size,
                     isScanning = isScanning,
-                    equalizerEngine = viewModel.equalizerEngine,
-                    isHiFiSupported = hifiActive,
                     isBitPerfectMode = isBitPerfectMode,
                     isSampleRateMatching = isSampleRateMatching,
                     isAudioAuxEnabled = isAudioAuxEnabled,
                     hifiProfileManager = PlaybackService.instance?.hifiProfileManager,
                     audioSnapshot = audioSnapshot,
                     onScanLibrary = { viewModel.scanLibrary() },
-                    onOpenEqualizer = { showEqualizerSheet = true },
                     onHiFiToggle = { viewModel.setHiFiAudioSinkEnabled(it) },
                     onBitPerfectToggle = { viewModel.setBitPerfectMode(it) },
                     onSampleRateMatchingToggle = { viewModel.setSampleRateMatching(it) },
@@ -482,7 +478,8 @@ fun MainAppScreen(
             currentSong = currentSong,
             onDismiss = { showQueueSheet = false },
             onSongClick = { song, list -> viewModel.playSong(song, list) },
-            onRemoveFromQueue = { index -> viewModel.removeFromQueue(index) }
+            onRemoveFromQueue = { index -> viewModel.removeFromQueue(index) },
+            onFavoriteToggle = { song -> viewModel.toggleFavorite(song) }
         )
     }
 

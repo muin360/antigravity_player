@@ -25,19 +25,17 @@ object LrcParser {
             val matches = lineRegex.findAll(trimmedLine).toList()
             if (matches.isNotEmpty()) {
                 val text = lineRegex.replace(trimmedLine, "").trim()
-                if (text.isNotEmpty()) {
-                    for (m in matches) {
-                        val min = m.groupValues[1].toLongOrNull() ?: 0L
-                        val sec = m.groupValues[2].toLongOrNull() ?: 0L
-                        val millisStr = m.groupValues[3]
-                        val millis = when (millisStr.length) {
-                            1 -> millisStr.toLong() * 100
-                            2 -> millisStr.toLong() * 10
-                            else -> millisStr.toLong()
-                        }
-                        val timeMs = min * 60 * 1000 + sec * 1000 + millis
-                        result.add(LrcLine(timeMs, text))
+                for (m in matches) {
+                    val min = m.groupValues[1].toLongOrNull() ?: 0L
+                    val sec = m.groupValues[2].toLongOrNull() ?: 0L
+                    val millisStr = m.groupValues[3]
+                    val millis = when (millisStr.length) {
+                        1 -> millisStr.toLong() * 100
+                        2 -> millisStr.toLong() * 10
+                        else -> millisStr.toLong()
                     }
+                    val timeMs = min * 60 * 1000 + sec * 1000 + millis
+                    result.add(LrcLine(timeMs, text))
                 }
             }
         }

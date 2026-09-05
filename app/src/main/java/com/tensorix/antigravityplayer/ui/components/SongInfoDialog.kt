@@ -88,7 +88,7 @@ fun SongInfoDialog(
                 DetailRow("Format / Codec", "$fileExtension ($sampleRateDisplay)")
                 DetailRow("Bit Depth & Rate", "$bitDepthDisplay • $bitrateDisplay")
                 DetailRow("File Size", fileSizeMb)
-                DetailRow("Storage Path", song.filePath.takeLast(50))
+                DetailRow("Storage Path", if (song.filePath.length > 50) "...${song.filePath.takeLast(47)}" else song.filePath)
             }
         },
         confirmButton = {

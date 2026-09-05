@@ -33,9 +33,9 @@ data class DynamicProfileState(
 )
 
 class DynamicProfileEngine(
-    private val context: Context,
     private val profileManager: HiFiProfileManager
 ) {
+    constructor(context: Context?, profileManager: HiFiProfileManager) : this(profileManager)
 
     private val _engineState = MutableStateFlow(DynamicProfileState())
     val engineState: StateFlow<DynamicProfileState> = _engineState.asStateFlow()

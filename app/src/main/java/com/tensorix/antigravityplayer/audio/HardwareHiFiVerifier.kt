@@ -64,9 +64,6 @@ object HardwareHiFiVerifier {
 
     private const val TAG = "HardwareHiFiVerifier"
 
-    // HAL direct PCM flag bitmasks from system/audio.h
-    private const val AUDIO_OUTPUT_FLAG_DIRECT = 0x01
-    private const val AUDIO_OUTPUT_FLAG_DIRECT_PCM = 0x2000
 
     @Volatile private var lastProbeTime = 0L
     @Volatile private var cachedResult: HardwareVerificationReport? = null
@@ -113,7 +110,9 @@ object HardwareHiFiVerifier {
                     .build()
                 
                 // Rule 26: Direct Android SDK call without reflection
-                AudioTrack.isDirectPlaybackSupported(format, attr)
+                runCatching {
+                    AudioTrack.isDirectPlaybackSupported(format, attr)
+                }.getOrDefault(false)
             }
             // Android 8.0–9 (API 26–28): HAL parameters
             else -> {
@@ -214,7 +213,7 @@ object HardwareHiFiVerifier {
             limitations.add("DSP Engine is modifying PCM samples")
         }
         if (!isDirectActive && trackSampleRate > 0 && trackSampleRate != systemSampleRate) {
-            limitations.add("System resamples track ($trackSampleRate Hz âž” $systemSampleRate Hz)")
+            limitations.add("System resamples track ($trackSampleRate Hz -> $systemSampleRate Hz)")
         }
 
         val report = HardwareVerificationReport(
@@ -308,9 +307,11 @@ object HardwareHiFiVerifier {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    val isSupported = AudioTrack.isDirectPlaybackSupported(format, attributes)
+                    val isSupported = runCatching {
+                        AudioTrack.isDirectPlaybackSupported(format, attributes)
+                    }.getOrDefault(false)
                     if (isSupported) {
-                        details.add("Direct Output confirmed via Method B (AudioTrack.isDirectPlaybackSupported)")
+                        details.add("Direct Output confirmed via Method B (AudioTrack direct support)")
                         return true
                     }
                 } catch (_: Exception) {
@@ -331,30 +332,6 @@ object HardwareHiFiVerifier {
             }
         } catch (e: Exception) {
             Log.w("AntigravityAudioAudit", "[PROBE] Method C error: ${e.message}")
-        }
-
-        // Direct public SDK API probes (Rule 26: zero reflection)
-        val fmt = android.media.AudioFormat.Builder()
-            .setSampleRate(targetRate)
-            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
-            .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
-            .build()
-        val attr = android.media.AudioAttributes.Builder()
-            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-
-        val supported = runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                AudioManager.getDirectPlaybackSupport(fmt, attr) != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED
-            } else if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                android.media.AudioTrack.isDirectPlaybackSupported(fmt, attr)
-            } else false
-        }.getOrDefault(false)
-
-        if (supported) {
-            details.add("Public direct-output probe confirmed for $targetRate Hz")
-            return true
         }
 
         return false

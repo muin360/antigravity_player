@@ -33,7 +33,6 @@ object OboeBridge {
         pcmEncoding: Int,
         isBitPerfect: Boolean
     ): Int
-    external fun write(handle: Long, audioData: FloatArray, numFrames: Int): Int
     external fun flushStream(handle: Long)
     external fun pauseStream(handle: Long)
     external fun startStream(handle: Long)
@@ -79,9 +78,6 @@ object OboeBridge {
         outputBitDepth: Int,
         invertPhase: Boolean
     )
-
-    // DSD Engine
-    external fun setDsdMode(handle: Long, mode: Int, dsdRate: Int)
 
     // Parametric EQ (PEQ)
     external fun clearPeqBands(handle: Long)

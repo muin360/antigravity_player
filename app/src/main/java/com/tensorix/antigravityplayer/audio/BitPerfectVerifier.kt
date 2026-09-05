@@ -1,6 +1,7 @@
 package com.tensorix.antigravityplayer.audio
 
 import androidx.media3.common.util.UnstableApi
+import com.tensorix.antigravityplayer.player.PlaybackService
 
 /**
  * AUTHORITATIVE BIT-PERFECT VERIFIER
@@ -218,8 +219,13 @@ object BitPerfectVerifier {
         }
 
         // 20. PEQ / AutoEQ is disabled
-        val peqDisabled = dspProcessor == null || !dspProcessor.isEqActive
+        val autoEqActive = PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true
+        val peqActive = dspProcessor != null && dspProcessor.isEqActive
+        val peqDisabled = !autoEqActive && !peqActive
         evidence.add(BitPerfectEvidence("PEQ Disabled", peqDisabled, EvidenceSource.OBOE_STREAM))
+        if (!peqDisabled) {
+            failureReasons.add("Parametric EQ or AutoEQ headphone profile correction is active")
+        }
 
         // 21. Limiter is disabled
         val limiterDisabled = dspProcessor == null || (!dspProcessor.limiterEnabled && !dspProcessor.isLimiterActive)
@@ -406,6 +412,7 @@ object BitPerfectVerifier {
             !dspBypassed ||
             signalTransformActive ||
             !eqDisabled ||
+            !peqDisabled ||
             !toneDisabled ||
             !limiterDisabled ||
             !ditherDisabled ||

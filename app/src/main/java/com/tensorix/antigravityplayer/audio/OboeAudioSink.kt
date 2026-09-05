@@ -511,13 +511,21 @@ class OboeAudioSink(
             val needed = bytesPerFrame - pendingBytes
             if (buffer.remaining() < needed) {
                 // Not enough bytes to complete 1 frame; append to staging and return
-                partialFrameBuffer.put(buffer)
+                if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                    partialFrameBuffer.put(buffer)
+                } else {
+                    partialFrameBuffer.clear()
+                }
                 return true
             }
             // Pull exact bytes needed to finish the frame
             val savedLimit = buffer.limit()
             buffer.limit(buffer.position() + needed)
-            partialFrameBuffer.put(buffer)
+            if (partialFrameBuffer.remaining() >= needed) {
+                partialFrameBuffer.put(buffer)
+            } else {
+                partialFrameBuffer.clear()
+            }
             buffer.limit(savedLimit)
 
             partialFrameBuffer.flip()
@@ -550,7 +558,11 @@ class OboeAudioSink(
         val usableBytes = curRemaining - remainder
         if (usableBytes <= 0) {
             if (remainder > 0) {
-                partialFrameBuffer.put(buffer)
+                if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                    partialFrameBuffer.put(buffer)
+                } else {
+                    partialFrameBuffer.clear()
+                }
             }
             return true
         }
@@ -602,7 +614,11 @@ class OboeAudioSink(
                 val bytesConsumed = framesWrittenResult * bytesPerFrame
                 buffer.position((curPosition + bytesConsumed).coerceAtMost(buffer.limit()))
                 if (buffer.remaining() in 1 until bytesPerFrame) {
-                    partialFrameBuffer.put(buffer)
+                    if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                        partialFrameBuffer.put(buffer)
+                    } else {
+                        partialFrameBuffer.clear()
+                    }
                 }
                 return !buffer.hasRemaining()
             }
@@ -904,7 +920,7 @@ class OboeAudioSink(
             val flags = booleanArrayOf(
                 !isBypass && dsp.isEqActive,
                 !isBypass && (PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true),
-                !isBypass && dsp.isEqActive,
+                !isBypass && (PlaybackService.instance?.autoEqEngine?.let { it.isAutoEqEnabled.value && (it.activeProfile.value?.bands?.isNotEmpty() == true) } ?: false),
                 !isBypass && dsp.isLimiterActive,
                 !isBypass && dsp.isDitherActive,
                 !isBypass && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001),

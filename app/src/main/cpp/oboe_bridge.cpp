@@ -879,123 +879,6 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
 }
 
 // ---------------------------------------------------------------------------
-// Float-array write path (legacy/auxiliary)
-// ---------------------------------------------------------------------------
-
-JNIEXPORT jint JNICALL
-Java_com_tensorix_antigravityplayer_audio_OboeBridge_write(
-    JNIEnv *env, jobject thiz, jlong handle, jfloatArray audioData, jint numFrames) {
-
-    if (!audioData || numFrames <= 0 || numFrames > kMaxFramesPerCall) {
-        return kErrBadArguments;
-    }
-
-    SlotLease lease;
-    auto *wrapper = getStreamValidatedLockFree(handle, /*generation*/ 0, lease);
-    if (!wrapper || !wrapper->isActive.load(std::memory_order_acquire)) {
-        return kErrStaleOrWrite;
-    }
-
-    // Rule 5: Enforce single-writer model per stream
-    bool expectedWriter = false;
-    if (!wrapper->isWriting_.compare_exchange_strong(expectedWriter, true, std::memory_order_acq_rel)) {
-        return 0; // concurrent write detected; caller will retry
-    }
-    struct WriterGuard {
-        std::atomic<bool> &flag;
-        std::atomic<int32_t> &writers;
-        ~WriterGuard() {
-            flag.store(false, std::memory_order_release);
-            writers.fetch_sub(1, std::memory_order_release);
-        }
-    } writerGuard{wrapper->isWriting_, wrapper->activeWriters_};
-    wrapper->activeWriters_.fetch_add(1, std::memory_order_acquire);
-
-    const jsize arrayLength = env->GetArrayLength(audioData);
-    const int32_t channelCount = wrapper->configuredChannelCount;
-    if (channelCount <= 0 ||
-        static_cast<int64_t>(numFrames) * channelCount > arrayLength) {
-        return kErrBadArguments;
-    }
-
-    jfloat *data = env->GetFloatArrayElements(audioData, nullptr);
-    if (!data) return kErrStaleOrWrite;
-
-    jint returnValue;
-    const bool bypassDsp = wrapper->dsp.isBitPerfectBypass();
-
-    if (wrapper->resampler.isPassThrough()) {
-        if (!bypassDsp) {
-            wrapper->dsp.process(data, numFrames, channelCount);
-        }
-        oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
-        if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
-            env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
-            return kErrStaleOrWrite;
-        }
-        const auto result = activeStream->write(data, numFrames, kWriteTimeoutNs);
-        env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
-
-        if (result.error() != oboe::Result::OK) {
-            if (result.error() == oboe::Result::ErrorTimeout) {
-                const int32_t timeouts =
-                    wrapper->consecutiveTimeouts.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (timeouts > kMaxConsecutiveTimeouts) {
-                    wrapper->isActive.store(false, std::memory_order_release);
-                    return kErrStaleOrWrite;
-                }
-                return 0;
-            }
-            wrapper->isActive.store(false, std::memory_order_release);
-            return kErrStaleOrWrite;
-        }
-        wrapper->consecutiveTimeouts.store(0, std::memory_order_relaxed);
-        const int32_t written = result.value();
-        if (written > 0) {
-            wrapper->atomicFramesWritten.fetch_add(written, std::memory_order_relaxed);
-        }
-        returnValue = std::min(written, numFrames);
-    } else {
-        // Resampled legacy path: same lock-free ring model as writeDirect.
-        if (!bypassDsp) {
-            wrapper->dsp.process(data, numFrames, channelCount);
-        }
-
-        antigravity::AudiophileResampler::Result r =
-            wrapper->resampler.process(data, numFrames);
-        env->ReleaseFloatArrayElements(audioData, data, JNI_ABORT);
-
-        wrapper->applyClearIfRequested();
-        const size_t producedSamples =
-            static_cast<size_t>(r.outputFrames) * static_cast<size_t>(channelCount);
-        if (producedSamples > 0 && r.outputData != nullptr &&
-            !wrapper->appendToRing(r.outputData, producedSamples)) {
-            wrapper->isActive.store(false, std::memory_order_release);
-            return kErrStaleOrWrite;
-        }
-        if (r.outputFrames > 0) {
-            wrapper->outputFramesProduced_.fetch_add(r.outputFrames,
-                                                     std::memory_order_relaxed);
-        }
-
-        oboe::AudioStream *activeStream = wrapper->rawStream_.load(std::memory_order_acquire);
-        if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
-            return kErrStaleOrWrite;
-        }
-
-        bool stalled = false;
-        wrapper->drainRingToStream(activeStream, channelCount, &stalled);
-        if (stalled) {
-            wrapper->isActive.store(false, std::memory_order_release);
-            return kErrStaleOrWrite;
-        }
-        returnValue = std::min(r.inputFramesConsumed, numFrames);
-    }
-
-    return returnValue;
-}
-
-// ---------------------------------------------------------------------------
 // Lifecycle controls
 // ---------------------------------------------------------------------------
 
@@ -1321,17 +1204,6 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspParametersBatch(
     w->dsp.setDspParametersBatch(p);
 }
 
-// ---------------- DSD control (engine retained; see truth audit for the
-// absence of any DSD file-decode path feeding it) ----------------
-
-JNIEXPORT void JNICALL
-Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDsdMode(
-    JNIEnv *env, jobject thiz, jlong handle, jint mode, jint dsdRate) {
-    if (auto w = getStream(handle)) {
-        w->dsd.configure(static_cast<antigravity::DsdMode>(mode), dsdRate);
-    }
-}
-
 // ---------------- Telemetry ----------------
 
 JNIEXPORT jdouble JNICALL
@@ -1381,34 +1253,6 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStagedPendingFrames(
     return static_cast<jlong>(stagedFrames);
 }
 
-// Frame-domain telemetry (P0-2): all values in RESAMPLED-OUTPUT frames.
-// [0] outputFramesProduced   (staged + handed to hardware)
-// [1] hardwareFramesWritten  (accepted by the device stream)
-// [2] stagedPendingFrames    (in ring, not yet handed to hardware)
-JNIEXPORT jlongArray JNICALL
-Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStreamFrameTelemetry(
-    JNIEnv *env, jobject thiz, jlong handle) {
-    auto w = getStream(handle);
-    if (!w) return nullptr;
-
-    jlong v[3];
-    v[0] = static_cast<jlong>(
-        w->outputFramesProduced_.load(std::memory_order_relaxed));
-    v[1] = static_cast<jlong>(
-        w->atomicFramesWritten.load(std::memory_order_relaxed));
-    const uint64_t stagedFrames =
-        w->stagedSamples() /
-        static_cast<uint64_t>(std::max(1, w->configuredChannelCount));
-    v[2] = static_cast<jlong>(stagedFrames);
-
-    auto out = env->NewLongArray(3);
-    if (!out || env->ExceptionCheck()) {
-        if (env->ExceptionCheck()) env->ExceptionClear();
-        return nullptr;
-    }
-    env->SetLongArrayRegion(out, 0, 3, v);
-    return out;
-}
 
 JNIEXPORT jobject JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(

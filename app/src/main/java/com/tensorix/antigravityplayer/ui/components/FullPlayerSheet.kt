@@ -229,14 +229,14 @@ fun FullPlayerSheet(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 val hiResPrefix = when {
-                                    song.sampleRate >= 352800 -> "âœ¦ 384kHz DXD MASTER"
-                                    song.sampleRate >= 176400 -> "âœ¦ 192kHz STUDIO MASTER"
-                                    song.sampleRate >= 88200 -> "âœ¦ 96kHz HI-RES AUDIO"
-                                    isHiRes -> "âœ¦ HI-RES"
+                                    song.sampleRate >= 352800 -> "✦ 384kHz DXD MASTER"
+                                    song.sampleRate >= 176400 -> "✦ 192kHz STUDIO MASTER"
+                                    song.sampleRate >= 88200 -> "✦ 96kHz HI-RES AUDIO"
+                                    isHiRes -> "✦ HI-RES"
                                     else -> ""
                                 }
                                 Text(
-                                    text = if (hiResPrefix.isNotEmpty()) "$hiResPrefix  ${badgeParts.joinToString(" Â· ")}" else badgeParts.joinToString(" Â· "),
+                                    text = if (hiResPrefix.isNotEmpty()) "$hiResPrefix  ${badgeParts.joinToString(" · ")}" else badgeParts.joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
                                         letterSpacing = 0.8.sp,
@@ -351,7 +351,7 @@ fun FullPlayerSheet(
                     )
                 }
 
-                // Play / Pause Button â€” gradient, glow shadow, animated icon
+                // Play / Pause Button — gradient, glow shadow, animated icon
                 // morph, press bounce and haptic tick (premium transport).
                 val playPress = rememberPressInteraction()
                 val playHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current

@@ -45,7 +45,8 @@ fun QueueSheet(
     currentSong: Song?,
     onDismiss: () -> Unit,
     onSongClick: (Song, List<Song>) -> Unit,
-    onRemoveFromQueue: (Int) -> Unit
+    onRemoveFromQueue: (Int) -> Unit,
+    onFavoriteToggle: (Song) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -118,7 +119,7 @@ fun QueueSheet(
                                     song = song,
                                     isPlaying = isCurrent,
                                     onSongClick = { onSongClick(song, queue) },
-                                    onFavoriteToggle = {}
+                                    onFavoriteToggle = { onFavoriteToggle(song) }
                                 )
                             }
 

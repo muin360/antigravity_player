@@ -81,6 +81,10 @@ class BiquadFilter {
         setCoefficients(computeNotch(f0, q, fs))
     }
 
+    fun setBandPass(f0: Double, q: Double, fs: Double) {
+        setCoefficients(computeBandPass(f0, q, fs))
+    }
+
     companion object {
         private fun safeNormalize(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double): BiquadCoeffs {
             if (!a0.isFinite() || abs(a0) < 1.0e-15) return BiquadCoeffs()
@@ -126,15 +130,17 @@ class BiquadFilter {
 
             val a = 10.0.pow(g / 40.0)
             val w0 = 2.0 * Math.PI * f / fs
-            val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / qSafe - 1.0) + 2.0)
             val cosW0 = cos(w0)
+            val sinW0 = sin(w0)
+            val alpha = sinW0 / (2.0 * qSafe)
+            val sqrtA = sqrt(a)
 
-            val a0 = (a + 1.0) + (a - 1.0) * cosW0 + 2.0 * sqrt(a) * alpha
-            val b0 = a * ((a + 1.0) - (a - 1.0) * cosW0 + 2.0 * sqrt(a) * alpha)
+            val b0 = a * ((a + 1.0) - (a - 1.0) * cosW0 + 2.0 * sqrtA * alpha)
             val b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cosW0)
-            val b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrt(a) * alpha)
+            val b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrtA * alpha)
+            val a0 = (a + 1.0) + (a - 1.0) * cosW0 + 2.0 * sqrtA * alpha
             val a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cosW0)
-            val a2 = (a + 1.0) + (a - 1.0) * cosW0 - 2.0 * sqrt(a) * alpha
+            val a2 = (a + 1.0) + (a - 1.0) * cosW0 - 2.0 * sqrtA * alpha
             return safeNormalize(b0, b1, b2, a0, a1, a2)
         }
 
@@ -147,15 +153,34 @@ class BiquadFilter {
 
             val a = 10.0.pow(g / 40.0)
             val w0 = 2.0 * Math.PI * f / fs
-            val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / qSafe - 1.0) + 2.0)
             val cosW0 = cos(w0)
+            val sinW0 = sin(w0)
+            val alpha = sinW0 / (2.0 * qSafe)
+            val sqrtA = sqrt(a)
 
-            val a0 = (a + 1.0) - (a - 1.0) * cosW0 + 2.0 * sqrt(a) * alpha
-            val b0 = a * ((a + 1.0) + (a - 1.0) * cosW0 + 2.0 * sqrt(a) * alpha)
+            val b0 = a * ((a + 1.0) + (a - 1.0) * cosW0 + 2.0 * sqrtA * alpha)
             val b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cosW0)
-            val b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrt(a) * alpha)
+            val b2 = a * ((a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrtA * alpha)
+            val a0 = (a + 1.0) - (a - 1.0) * cosW0 + 2.0 * sqrtA * alpha
             val a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cosW0)
-            val a2 = (a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrt(a) * alpha
+            val a2 = (a + 1.0) - (a - 1.0) * cosW0 - 2.0 * sqrtA * alpha
+            return safeNormalize(b0, b1, b2, a0, a1, a2)
+        }
+
+        fun computeBandPass(f0: Double, q: Double, fs: Double): BiquadCoeffs {
+            if (!fs.isFinite() || fs <= 0.0) return BiquadCoeffs()
+            val f = f0.coerceIn(1.0, fs * 0.499)
+            val qSafe = q.coerceIn(0.01, 100.0)
+            val w0 = 2.0 * Math.PI * f / fs
+            val cosW0 = cos(w0)
+            val alpha = sin(w0) / (2.0 * qSafe)
+
+            val b0 = alpha
+            val b1 = 0.0
+            val b2 = -alpha
+            val a0 = 1.0 + alpha
+            val a1 = -2.0 * cosW0
+            val a2 = 1.0 - alpha
             return safeNormalize(b0, b1, b2, a0, a1, a2)
         }
 

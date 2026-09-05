@@ -528,7 +528,7 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
 
         // 2. Interpolated waveshaping stage
         if (shapingStageEngaged) {
-            for (int ch = 0; ch < channelCount; ++ch) {
+            for (int ch = 0; ch < std::min(channelCount, 2); ++ch) {
                 double s = (ch == 0) ? sL : sR;
                 auto &history = (ch == 0) ? osSamplesL_ : osSamplesR_;
 
@@ -734,6 +734,11 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
         audioData[baseIdx] = static_cast<float>(std::clamp(sL, -1.0, 1.0));
         if (channelCount > 1) {
             audioData[baseIdx + 1] = static_cast<float>(std::clamp(sR, -1.0, 1.0));
+        }
+        for (int ch = 2; ch < channelCount; ++ch) {
+            double sSurround = static_cast<double>(audioData[baseIdx + ch]);
+            sSurround *= totalPreGain * dvc;
+            audioData[baseIdx + ch] = static_cast<float>(std::clamp(sSurround, -1.0, 1.0));
         }
     }
 

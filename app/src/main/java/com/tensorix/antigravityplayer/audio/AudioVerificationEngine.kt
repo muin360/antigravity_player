@@ -15,7 +15,10 @@ object AudioVerificationEngine {
         activeRoute: AudioRouteCapability?,
         dspProcessor: Audiophile64BitDspProcessor? = null
     ): CanonicalAudioRuntimeSnapshot {
-        val isBitPerfectRequested = !isDspActive && (dspProcessor?.isBitPerfectBypass == true)
+        val isBitPerfectRequested = !isDspActive && (
+            (PlaybackService.instance?.bitPerfectMode?.value == true) ||
+            (dspProcessor?.isBitPerfectBypass == true)
+        )
         val hardwareReport = HardwareHiFiVerifier.probeHardwareState(context, trackInfo.sampleRateHz, trackInfo.bitDepth, isBitPerfectRequested)
         val activeSnapshot = OboeAudioSink.activeStreamSnapshot
         val nativeInfo = activeSnapshot?.info
@@ -229,22 +232,7 @@ object AudioVerificationEngine {
             resamplerState = AudioEvidence(resamplerStateValue, if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.HAL_PARAMETER, Confidence.HIGH_CONFIDENCE),
             dspState = AudioEvidence(if (isDspActive) "ACTIVE" else "OFF", EvidenceSource.OBOE_STREAM, Confidence.VERIFIED),
             dac = dacState,
-            bitPerfect = BitPerfectRuntimeState(BitPerfectState.UNKNOWN, BitPerfectVerifier.isEligible(
-                CanonicalAudioRuntimeSnapshot(
-                    source = source, decoder = decoder, processing = processing, requestedOutput = requested,
-                    actualOutput = actual, activeRoute = routeEvidence, audioApi = apiEvidence,
-                    sharingMode = AudioEvidence("SHARED", EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    performanceMode = AudioEvidence("NONE", EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    directPathActive = AudioEvidence(false, EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    mixerPathActive = AudioEvidence(true, EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    resamplerState = AudioEvidence("OFF", EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    dspState = AudioEvidence("OFF", EvidenceSource.UNKNOWN, Confidence.UNKNOWN),
-                    dac = dacState,
-                    bitPerfect = BitPerfectRuntimeState(BitPerfectState.UNKNOWN, false, null, Confidence.UNKNOWN),
-                    confidence = Confidence.UNKNOWN,
-                    limitations = hardwareReport.limitations
-                )
-            ), null, Confidence.UNKNOWN),
+            bitPerfect = BitPerfectRuntimeState(BitPerfectState.UNKNOWN, false, null, Confidence.UNKNOWN),
             nativeStream = nativeStreamSnapshot,
             pipeline = pipelineSnapshot,
             confidence = Confidence.UNKNOWN,

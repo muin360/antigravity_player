@@ -61,11 +61,11 @@ fun LyricsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
 
-    // Find active line index based on current position
-    val activeIndex = lyricsLines.indexOfLast { it.timeMs <= currentPositionMs }.coerceAtLeast(0)
+    // Find active line index based on current position (-1 if before first line)
+    val activeIndex = lyricsLines.indexOfLast { it.timeMs <= currentPositionMs }
 
     LaunchedEffect(activeIndex) {
-        if (lyricsLines.isNotEmpty() && activeIndex in lyricsLines.indices) {
+        if (lyricsLines.isNotEmpty() && activeIndex >= 0 && activeIndex in lyricsLines.indices) {
             listState.animateScrollToItem((activeIndex - 2).coerceAtLeast(0))
         }
     }
@@ -143,8 +143,9 @@ fun LyricsSheet(
                             ),
                             label = "lyricScale"
                         )
+                        val displayText = if (line.text.isEmpty()) if (isActive) "♪ ♪ ♪" else "♪" else line.text
                         Text(
-                            text = line.text,
+                            text = displayText,
                             style = MaterialTheme.typography.headlineSmall.copy(
                                 fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                                 fontSize = if (isActive) 22.sp else 16.sp,

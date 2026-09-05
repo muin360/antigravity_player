@@ -60,7 +60,6 @@ import com.tensorix.antigravityplayer.ui.theme.TextSecondary
 fun PlaylistsScreen(
     playlistsWithSongs: List<PlaylistWithSongs>,
     currentSong: Song?,
-    isPlaying: Boolean,
     onCreatePlaylist: (String) -> Unit,
     onDeletePlaylist: (Playlist) -> Unit,
     onRemoveSongFromPlaylist: (Long, Long) -> Unit,
@@ -126,7 +125,7 @@ fun PlaylistsScreen(
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(activeSelectedPlaylist.songs, key = { index, song -> if (song.id > 0) song.id else "pl_$index" }) { _, song ->
+                    itemsIndexed(activeSelectedPlaylist.songs, key = { index, song -> "${song.id}_$index" }) { _, song ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically

@@ -156,8 +156,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val currentSong get() = musicController.currentSong
     val isPlaying get() = musicController.isPlaying
-    val currentPositionMs get() = musicController.currentPositionMs
-
     val currentPositionState: StateFlow<Long> get() = musicController.currentPositionMs
     val durationMs get() = musicController.durationMs
     val shuffleEnabled get() = musicController.shuffleEnabled
@@ -391,6 +389,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         }
         musicController.release()
-        audioOutputManager.release()
+        // Only release UI's own fallback output manager; never release PlaybackService's active manager!
+        fallbackOutputManager.release()
     }
 }

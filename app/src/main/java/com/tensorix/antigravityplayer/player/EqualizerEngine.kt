@@ -203,7 +203,7 @@ class EqualizerEngine(private val context: Context) {
         syncWithDsp()
     }
 
-    private fun syncWithNativeDsp() {
+    internal fun syncWithNativeDsp() {
         val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
         if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
             try {
@@ -217,8 +217,8 @@ class EqualizerEngine(private val context: Context) {
                 val flags = booleanArrayOf(
                     !isBypass && isEnabled && eqBands.any { it < -0.01 || it > 0.01 }, // 0: eqActive
                     !isBypass && isEnabled && (PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true), // 1: autoEqActive
-                    !isBypass && isEnabled && (dsp?.isEqActive == true), // 2: peqActive
-                    !isBypass && isEnabled && _isTurboSharpness.value,    // 3: limiterActive
+                    !isBypass && isEnabled && (PlaybackService.instance?.autoEqEngine?.let { it.isAutoEqEnabled.value && (it.activeProfile.value?.bands?.isNotEmpty() == true) } ?: false), // 2: peqActive
+                    !isBypass && isEnabled && (dsp?.isLimiterActive ?: true),    // 3: limiterActive
                     !isBypass && isEnabled && (dsp?.isDitherActive == true), // 4: ditherActive
                     !isBypass && isEnabled && (dsp != null && (dsp.replayGainMultiplier < 0.999 || dsp.replayGainMultiplier > 1.001)), // 5: replayGainActive
                     !isBypass && isEnabled && _crossfeedLevel.value > 0.001, // 6: crossfeedActive
@@ -302,6 +302,8 @@ class EqualizerEngine(private val context: Context) {
             dsp.limiterThresholdDb = _limiterThreshold.value.toDouble()
             dsp.clarityEnhancerGain = _clarityGain.value.toDouble()
             dsp.warmSaturationLevel = _warmSaturation.value.toDouble()
+            dsp.triodeWarmthLevel = _triodeWarmth.value.toDouble()
+            dsp.pentodeTapeLevel = _pentodeTape.value.toDouble()
             dsp.airPresenceGainDb = _airPresence.value.toDouble()
             dsp.crossfeedLevel = _crossfeedLevel.value.toDouble()
             dsp.channelBalance = _channelBalance.value.toDouble()
@@ -328,6 +330,7 @@ class EqualizerEngine(private val context: Context) {
             currentAudioSessionId = 0
             attachToAudioSession(session)
         }
+        syncWithDsp()
     }
 
     fun setBandLevel(band: Short, level: Short) {

@@ -170,7 +170,7 @@ class MusicController(private val context: Context) {
                     val calculatedBitDepth = when {
                         song.format == "DSD" || song.format == "DXD" -> 32
                         song.format == "FLAC" || song.format == "ALAC" || song.format == "WAV" || song.format == "AIFF" -> {
-                            if (song.sampleRate >= 88200 || song.bitrate > 1000) 24 else 24
+                            if (song.sampleRate >= 88200 || song.bitrate > 1000) 24 else 16
                         }
                         song.bitrate > 900 || song.sampleRate >= 88200 -> 24
                         else -> 16
@@ -484,23 +484,41 @@ class MusicController(private val context: Context) {
     )
 
     private fun readReplayGainTags(path: String, codec: String?): ReplayGainTags {
-        val file = runCatching { File(path) }.getOrNull() ?: return ReplayGainTags()
-        if (!file.exists() || !file.isFile) return ReplayGainTags()
         val ext = path.substringAfterLast('.', "").lowercase()
-        if (ext !in setOf("mp3", "flac", "ogg", "opus") && codec?.equals("MP3", true) != true) return ReplayGainTags()
+        val isSupportedFormat = ext in setOf("mp3", "flac", "ogg", "opus") ||
+            codec?.uppercase() in setOf("MP3", "FLAC", "OGG", "OPUS", "VORBIS")
+        if (!isSupportedFormat) return ReplayGainTags()
 
         // Bounded header read: ReplayGain lives in ID3v2 (start of file) or
         // FLAC Vorbis comments (metadata blocks before audio). 1 MB covers
         // both without ever loading a full lossless track into memory.
         val bytes = runCatching {
-            java.io.RandomAccessFile(file, "r").use { raf ->
-                val size = minOf(raf.length(), 1024L * 1024L).toInt()
-                if (size <= 0) null
-                else {
-                    val buf = ByteArray(size)
-                    raf.readFully(buf)
-                    buf
+            if (path.startsWith("content://")) {
+                val uri = Uri.parse(path)
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val maxBytes = 1024 * 1024
+                    val buf = ByteArray(maxBytes)
+                    var totalRead = 0
+                    while (totalRead < maxBytes) {
+                        val read = stream.read(buf, totalRead, maxBytes - totalRead)
+                        if (read <= 0) break
+                        totalRead += read
+                    }
+                    if (totalRead <= 0) null else buf.copyOf(totalRead)
                 }
+            } else {
+                val file = File(path)
+                if (file.exists() && file.isFile) {
+                    java.io.RandomAccessFile(file, "r").use { raf ->
+                        val size = minOf(raf.length(), 1024L * 1024L).toInt()
+                        if (size <= 0) null
+                        else {
+                            val buf = ByteArray(size)
+                            raf.readFully(buf)
+                            buf
+                        }
+                    }
+                } else null
             }
         }.getOrNull() ?: return ReplayGainTags()
         val text = String(bytes, Charsets.ISO_8859_1)

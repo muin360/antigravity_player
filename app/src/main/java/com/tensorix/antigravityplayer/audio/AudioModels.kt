@@ -121,25 +121,6 @@ data class SignalProcessingPipelineSnapshot(
     val dacEndpoint: String = "Hardware Endpoint"
 )
 
-data class AudioRuntimeSnapshot(
-    val sourceFormat: AudioFormatSnapshot,
-    val decodedFormat: AudioFormatSnapshot,
-    val processingFormat: AudioFormatSnapshot,
-    val requestedOutputFormat: AudioFormatSnapshot,
-    val actualOutputFormat: AudioFormatSnapshot,
-
-    val activeRoute: AudioEvidence<AudioOutputRouteType>,
-    val audioApi: AudioEvidence<AudioOutputApi>,
-    val sharingMode: AudioEvidence<String>, // EXCLUSIVE / SHARED
-    val performanceMode: AudioEvidence<String>,
-
-    val directPlaybackActive: AudioEvidence<Boolean>,
-    val resamplerState: AudioEvidence<String>, // OFF / ACTIVE / BYPASS
-    val dspState: AudioEvidence<String>, // OFF / ACTIVE / BYPASS
-
-    val bitPerfectState: BitPerfectState,
-    val bitPerfectEvidence: String = ""
-)
 
 enum class AudioOutputApi(val label: String) {
     AAUDIO("AAudio (High Performance)"),
@@ -289,7 +270,6 @@ data class AudioOutputState(
     val signalPathStages: List<SignalPathStage> = emptyList(),
     val deviceLimitations: List<String> = emptyList(),
     val latencyMs: Int = 0,
-    val runtimeSnapshot: AudioRuntimeSnapshot? = null,
     val canonicalSnapshot: CanonicalAudioRuntimeSnapshot? = null
 )
 

@@ -182,7 +182,9 @@ class AudioOutputManager(
                 support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                AudioTrack.isDirectPlaybackSupported(audioFormat, audioAttributes)
+                runCatching {
+                    AudioTrack.isDirectPlaybackSupported(audioFormat, audioAttributes)
+                }.getOrDefault(false)
             }
             else -> false
         }
@@ -371,7 +373,6 @@ class AudioOutputManager(
             signalPathStages = signalStages,
             deviceLimitations = limitations,
             latencyMs = 0,
-            runtimeSnapshot = null,
             canonicalSnapshot = canonicalSnapshot
         )
     }

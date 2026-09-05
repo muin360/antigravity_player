@@ -12,7 +12,6 @@ import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +31,7 @@ fun AudioOutputSettings(
 ) {
     val context = LocalContext.current
     val configManager = remember { AudioOutputConfigManager.getInstance(context) }
-    
+
     // We categorize settings by route types
     val categories = listOf(
         AudioOutputRouteType.USB_DAC,
@@ -68,13 +67,11 @@ fun AudioOutputSettings(
         categories.fastForEach { routeType ->
             OutputCategoryCard(
                 routeType = routeType,
-                configManager = configManager,
-                audioSnapshot = audioSnapshot,
-                onConfigChange = onConfigChange
+                audioSnapshot = audioSnapshot
             )
             Spacer(modifier = Modifier.height(16.dp))
         }
-        
+
         Spacer(modifier = Modifier.height(40.dp))
     }
 }
@@ -82,13 +79,10 @@ fun AudioOutputSettings(
 @Composable
 fun OutputCategoryCard(
     routeType: AudioOutputRouteType,
-    configManager: AudioOutputConfigManager,
-    audioSnapshot: AudiophilePlaybackSnapshot,
-    onConfigChange: () -> Unit
+    audioSnapshot: AudiophilePlaybackSnapshot
 ) {
     val isActive = audioSnapshot.output.activeRoute?.routeType == routeType
-    var config by remember { mutableStateOf(configManager.getConfigForDevice(routeType)) }
-    var expanded by remember { mutableStateOf(isActive) } // Expand by default if active
+    var expanded by remember { mutableStateOf(isActive) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = if (isActive) SurfaceDark else CardBackground.copy(alpha = 0.4f)),
@@ -117,7 +111,7 @@ fun OutputCategoryCard(
                     Column {
                         Text(routeType.displayName, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         val statusText = if (isActive) {
-                             "ACTIVE • ${audioSnapshot.output.currentPlaybackBitDepth}-bit / ${audioSnapshot.output.currentPlaybackSampleRate / 1000.0} kHz"
+                            "ACTIVE • ${audioSnapshot.output.currentPlaybackBitDepth}-bit / ${audioSnapshot.output.currentPlaybackSampleRate / 1000.0} kHz"
                         } else "AVAILABLE"
                         Text(statusText, color = if (isActive) PrimaryCyan else TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Black)
                     }
@@ -143,4 +137,3 @@ fun OutputCategoryCard(
         }
     }
 }
-

@@ -31,7 +31,7 @@ data class HiFiProfile(
     val isCustom: Boolean = false
 )
 
-class HiFiProfileManager(private val context: Context) {
+class HiFiProfileManager(context: Context? = null) {
 
     val defaultProfiles: List<HiFiProfile> = listOf(
         HiFiProfile(

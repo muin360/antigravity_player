@@ -41,15 +41,15 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     totalTracksCount: Int,
     isScanning: Boolean,
-    equalizerEngine: EqualizerEngine?,
-    isHiFiSupported: Boolean,
+    equalizerEngine: EqualizerEngine? = null,
+    isHiFiSupported: Boolean = true,
     isBitPerfectMode: Boolean,
     isSampleRateMatching: Boolean,
     isAudioAuxEnabled: Boolean,
     hifiProfileManager: HiFiProfileManager?,
     audioSnapshot: AudiophilePlaybackSnapshot,
     onScanLibrary: () -> Unit,
-    onOpenEqualizer: () -> Unit,
+    onOpenEqualizer: () -> Unit = {},
     onHiFiToggle: (Boolean) -> Unit,
     onBitPerfectToggle: (Boolean) -> Unit = {},
     onSampleRateMatchingToggle: (Boolean) -> Unit = {},
@@ -61,7 +61,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     
     val hiFiEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.hiFiEnabled, true)
-    val isTurboMode by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.sampleRateMatching, true)
+    val sampleRateMatchingActive by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.sampleRateMatching, isSampleRateMatching)
     val autoProfileSwitch by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.autoProfileSwitch, true)
 
     var showDiagnostics by remember { mutableStateOf(false) }
@@ -206,7 +206,7 @@ fun SettingsScreen(
                                     Text("Open the device stream at the track's native rate; resampler owns conversion when off", color = TextSecondary, fontSize = 10.sp)
                                 }
                                 Switch(
-                                    checked = isTurboMode,
+                                    checked = sampleRateMatchingActive,
                                     onCheckedChange = { onSampleRateMatchingToggle(it) },
                                     colors = SwitchDefaults.colors(checkedThumbColor = PrimaryCyan)
                                 )

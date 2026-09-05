@@ -39,15 +39,18 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
         val selection = "(${MediaStore.Audio.Media.IS_MUSIC} != 0 OR ${MediaStore.Audio.Media.MIME_TYPE} LIKE 'audio/%') AND ${MediaStore.Audio.Media.DURATION} >= 3000 AND (${MediaStore.Audio.Media.IS_RINGTONE} = 0 AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0 AND ${MediaStore.Audio.Media.IS_ALARM} = 0)"
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
+        var querySucceeded = false
         val cursor = try {
-            context.contentResolver.query(
+            val c = context.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 projection,
                 selection,
                 null,
                 sortOrder
             )
-        } catch (e: SecurityException) {
+            querySucceeded = (c != null)
+            c
+        } catch (e: Exception) {
             android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
             null
         }
@@ -170,8 +173,13 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
 
         if (scannedSongs.isNotEmpty()) {
             songDao.insertSongs(scannedSongs)
+            songDao.deleteStaleLocalSongs(scanStartTimestamp)
+        } else if (querySucceeded && existingSongsMap.isEmpty()) {
+            // Legitimate empty library
+            songDao.deleteStaleLocalSongs(scanStartTimestamp)
+        } else {
+            android.util.Log.w("LibraryScanner", "Storage scan yielded 0 songs while existing library has ${existingSongsMap.size} tracks; preserving existing library.")
         }
-        songDao.deleteStaleLocalSongs(scanStartTimestamp)
 
         return@withContext scannedSongs
     }
