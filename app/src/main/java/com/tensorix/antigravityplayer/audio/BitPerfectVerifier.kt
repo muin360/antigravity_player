@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
  * Strictly enforces all 35 mandatory runtime conditions for VERIFIED status.
  * ZERO false positives.
  * UNKNOWN / INFERRED confidence blocks VERIFIED.
+ * Negative dominance: ANY failed criterion immediately yields NON-VERIFIED.
  * Contradictory or heuristic paths are rejected.
  */
 @UnstableApi
@@ -25,7 +26,8 @@ object BitPerfectVerifier {
                 state = BitPerfectState.DISABLED,
                 evidence = emptyList(),
                 confidence = Confidence.VERIFIED,
-                failureReasons = emptyList()
+                failureReasons = emptyList(),
+                tier = BitPerfectTier.UNKNOWN
             )
         }
 
@@ -41,16 +43,30 @@ object BitPerfectVerifier {
         }
 
         // 2. Playback stream is actually active (lifecycle state proof, not sampleRate > 0)
+        // P0 Requirement 7: STREAM ACTIVE MUST NEVER BE INFERRED FROM NULL TELEMETRY.
         val nativeStream = snapshot.nativeStream
-        val streamActive = streamExists && (nativeStream == null || nativeStream.isStarted || nativeStream.state.equals("Started", ignoreCase = true) || nativeStream.framesWritten > 0L)
+        val activeSnapshot = OboeAudioSink.activeStreamSnapshot
+        val generationMatches = activeSnapshot == null || nativeStream == null ||
+            activeSnapshot.generation == 0L || nativeStream.streamGeneration == 0L ||
+            activeSnapshot.generation == nativeStream.streamGeneration
+
+        val streamActive = streamExists && nativeStream != null &&
+            (nativeStream.isStarted || nativeStream.state.equals("Started", ignoreCase = true)) &&
+            generationMatches
         evidence.add(BitPerfectEvidence("Stream Active", streamActive, EvidenceSource.OBOE_STREAM))
-        if (!streamActive) {
-            failureReasons.add("Audio stream is not actively running")
+        if (nativeStream == null) {
+            failureReasons.add("Audio stream telemetry is null")
+            hasUnknownOrInferredCritical = true
+        } else if (!generationMatches) {
+            failureReasons.add("Audio stream generation mismatch (stale stream telemetry)")
+            hasUnknownOrInferredCritical = true
+        } else if (!streamActive) {
+            failureReasons.add("Audio stream is not actively running (state: ${nativeStream.state})")
         }
 
         // 3. Active output route verified (UNKNOWN or INFERRED blocks verification)
         val routeVerified = snapshot.activeRoute.confidence == Confidence.VERIFIED
-        if (snapshot.activeRoute.confidence == Confidence.UNKNOWN || snapshot.activeRoute.confidence == Confidence.INFERRED) {
+        if (snapshot.activeRoute.confidence != Confidence.VERIFIED) {
             hasUnknownOrInferredCritical = true
         }
         evidence.add(BitPerfectEvidence("Route Verified", routeVerified, snapshot.activeRoute.source))
@@ -68,40 +84,35 @@ object BitPerfectVerifier {
         }
 
         // 5. Actual API known
-        val apiKnown = snapshot.audioApi.confidence == Confidence.VERIFIED || snapshot.audioApi.confidence == Confidence.HIGH_CONFIDENCE
+        val apiKnown = snapshot.audioApi.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("API Known", apiKnown, snapshot.audioApi.source))
         if (!apiKnown) {
             failureReasons.add("Audio output API is unknown or unverified")
             hasUnknownOrInferredCritical = true
         }
 
-        // 6. Actual sharing mode known
-        val sharingKnown = snapshot.sharingMode.confidence == Confidence.VERIFIED || snapshot.sharingMode.confidence == Confidence.HIGH_CONFIDENCE
+        // 6. Actual sharing mode known and verified
+        val sharingKnown = snapshot.sharingMode.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Sharing Mode Known", sharingKnown, snapshot.sharingMode.source))
         if (!sharingKnown) {
-            failureReasons.add("Stream sharing mode is unknown")
+            failureReasons.add("Stream sharing mode is unknown or unverified")
             hasUnknownOrInferredCritical = true
         }
 
         // 7. Actual sharing mode is Exclusive (for USB/Wired direct path)
         // Rule 13: Never use 'EXCLUSIVE || directPathActive' - they are separate facts.
-        val isExclusive = snapshot.sharingMode.value == "EXCLUSIVE"
+        val isExclusive = snapshot.sharingMode.value == "EXCLUSIVE" && snapshot.sharingMode.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Exclusive Mode", isExclusive, snapshot.sharingMode.source))
         if (!isExclusive) {
-            failureReasons.add("Stream is operating in shared mixer mode")
-        }
-        if (snapshot.sharingMode.confidence != Confidence.VERIFIED) {
+            failureReasons.add("Stream is operating in shared mixer mode or not verified exclusive")
             hasUnknownOrInferredCritical = true
         }
 
         // 8. Actual output sample rate known and verified
-        val outputRateKnown = snapshot.actualOutput.sampleRate.value > 0 && 
-                             (snapshot.actualOutput.sampleRate.confidence == Confidence.VERIFIED || snapshot.actualOutput.sampleRate.confidence == Confidence.HIGH_CONFIDENCE)
+        val outputRateKnown = snapshot.actualOutput.sampleRate.value > 0 && snapshot.actualOutput.sampleRate.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Output Rate Known", outputRateKnown, snapshot.actualOutput.sampleRate.source))
         if (!outputRateKnown) {
             failureReasons.add("Actual hardware output sample rate is unknown or unverified")
-            hasUnknownOrInferredCritical = true
-        } else if (snapshot.actualOutput.sampleRate.confidence != Confidence.VERIFIED) {
             hasUnknownOrInferredCritical = true
         }
 
@@ -117,17 +128,16 @@ object BitPerfectVerifier {
         val rateMatch = outputRateKnown && sourceRateKnown && snapshot.actualOutput.sampleRate.value == snapshot.source.sampleRate.value
         evidence.add(BitPerfectEvidence("Sample Rate Match", rateMatch, EvidenceSource.HAL_PARAMETER, "${snapshot.source.sampleRate.value} Hz -> ${snapshot.actualOutput.sampleRate.value} Hz"))
         if (!rateMatch) {
-            failureReasons.add("Sample rate mismatch: ${snapshot.source.sampleRate.value} Hz source vs ${snapshot.actualOutput.sampleRate.value} Hz output")
+            if (snapshot.actualOutput.sampleRate.value > 0 && snapshot.source.sampleRate.value > 0 && snapshot.actualOutput.sampleRate.value != snapshot.source.sampleRate.value) {
+                failureReasons.add("Sample rate mismatch: ${snapshot.source.sampleRate.value} Hz source vs ${snapshot.actualOutput.sampleRate.value} Hz output")
+            }
         }
 
-        // 11. Actual channel count known
-        val outputChannelsKnown = snapshot.actualOutput.channels.value > 0 && 
-                                 (snapshot.actualOutput.channels.confidence == Confidence.VERIFIED || snapshot.actualOutput.channels.confidence == Confidence.HIGH_CONFIDENCE)
+        // 11. Actual channel count known and verified
+        val outputChannelsKnown = snapshot.actualOutput.channels.value > 0 && snapshot.actualOutput.channels.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Output Channels Known", outputChannelsKnown, snapshot.actualOutput.channels.source))
         if (!outputChannelsKnown) {
-            failureReasons.add("Actual hardware output channel count is unknown")
-            hasUnknownOrInferredCritical = true
-        } else if (snapshot.actualOutput.channels.confidence != Confidence.VERIFIED) {
+            failureReasons.add("Actual hardware output channel count is unknown or unverified")
             hasUnknownOrInferredCritical = true
         }
 
@@ -143,14 +153,16 @@ object BitPerfectVerifier {
         val channelsMatch = outputChannelsKnown && sourceChannelsKnown && snapshot.actualOutput.channels.value == snapshot.source.channels.value
         evidence.add(BitPerfectEvidence("Channel Match", channelsMatch, EvidenceSource.HAL_PARAMETER, "${snapshot.source.channels.value} ch -> ${snapshot.actualOutput.channels.value} ch"))
         if (!channelsMatch) {
-            failureReasons.add("Channel count mismatch: ${snapshot.source.channels.value} ch vs ${snapshot.actualOutput.channels.value} ch")
+            if (snapshot.actualOutput.channels.value > 0 && snapshot.source.channels.value > 0 && snapshot.actualOutput.channels.value != snapshot.source.channels.value) {
+                failureReasons.add("Channel count mismatch: ${snapshot.source.channels.value} ch vs ${snapshot.actualOutput.channels.value} ch")
+            }
         }
 
         // 14. Actual output encoding known
-        val encodingKnown = snapshot.actualOutput.encoding.value.isNotEmpty() && snapshot.actualOutput.encoding.confidence != Confidence.UNKNOWN
+        val encodingKnown = snapshot.actualOutput.encoding.value.isNotEmpty() && snapshot.actualOutput.encoding.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Encoding Known", encodingKnown, snapshot.actualOutput.encoding.source))
         if (!encodingKnown) {
-            failureReasons.add("Actual hardware output encoding is unknown")
+            failureReasons.add("Actual hardware output encoding is unknown or unverified")
             hasUnknownOrInferredCritical = true
         }
 
@@ -170,11 +182,24 @@ object BitPerfectVerifier {
             failureReasons.add("Resampler is actively altering audio clock")
         }
 
-        // 17. DSP is completely disabled or in pure bit-perfect bypass
-        val dspBypassed = dspProcessor == null || (!dspProcessor.isEnabled && dspProcessor.isBitPerfectBypass) || (dspProcessor.isBitPerfectBypass && !dspProcessor.isEnabled)
-        evidence.add(BitPerfectEvidence("DSP Bypassed", dspBypassed, EvidenceSource.OBOE_STREAM))
-        if (!dspBypassed) {
-            failureReasons.add("DSP Engine is active")
+        // 17. DSP is completely disabled or in pure bit-perfect bypass (P0 Requirement 6)
+        val processorEnabled = dspProcessor?.isEnabled == true
+        val processorBypassed = dspProcessor?.isBitPerfectBypass == true
+        val signalTransformActive = dspProcessor != null && processorEnabled && !processorBypassed
+        val dspBypassed = dspProcessor == null || (!processorEnabled) || processorBypassed
+        evidence.add(
+            BitPerfectEvidence(
+                "DSP Bypassed",
+                dspBypassed && !signalTransformActive,
+                EvidenceSource.OBOE_STREAM,
+                if (dspProcessor == null) "No DSP processor configured"
+                else if (!processorEnabled) "DSP processor is disabled"
+                else if (processorBypassed) "DSP in bit-perfect bypass mode"
+                else "DSP is active and modifying signal"
+            )
+        )
+        if (!dspBypassed || signalTransformActive) {
+            failureReasons.add("DSP Engine is active and modifying signal")
         }
 
         // 18. EQ is disabled (Rule 8: independent explicit verification)
@@ -260,14 +285,11 @@ object BitPerfectVerifier {
         }
 
         // 30. No channel transformation active (Rule 9: verified from actual evidence)
-        val channelCountsMatch = snapshot.source.channels.value > 0 &&
-            snapshot.actualOutput.channels.value > 0 &&
-            snapshot.source.channels.value == snapshot.actualOutput.channels.value
         val stereoExpansionOff = dspProcessor == null || !dspProcessor.isStereoExpansionActive
         val subBassMonoOff = dspProcessor == null || !dspProcessor.isSubBassMonoActive
         val invertPhaseOff = dspProcessor == null || !dspProcessor.isInvertPhaseActive
         val noChannelRemap = snapshot.pipeline?.channelRemapActive != true
-        val noChannelTransform = channelCountsMatch && balanceUnity && stereoExpansionOff && subBassMonoOff && invertPhaseOff && noChannelRemap
+        val noChannelTransform = balanceUnity && stereoExpansionOff && subBassMonoOff && invertPhaseOff && noChannelRemap
         evidence.add(BitPerfectEvidence("No Channel Transform", noChannelTransform, EvidenceSource.OBOE_STREAM))
         if (!noChannelTransform) {
             failureReasons.add("Channel transformation, downmixing, or spatial remapping is active")
@@ -277,61 +299,83 @@ object BitPerfectVerifier {
         val sourceBits = snapshot.source.bitDepth.value
         val outputBits = snapshot.actualOutput.bitDepth.value
         val isFloatOutput = snapshot.actualOutput.encoding.value.contains("Float", ignoreCase = true)
-        val bitDepthPreserved = when {
-            sourceBits > 0 && outputBits > 0 -> {
-                if (isFloatOutput) {
-                    // IEEE 754 32-bit float has 24 bits of significand precision (23 explicit + 1 implicit).
-                    // 16-bit and 24-bit integer PCM fit losslessly with exact mathematical identity.
-                    // 32-bit integer PCM loses 8 bits of precision when mapped to 32-bit float and is NOT bit-perfect.
-                    sourceBits <= 24
-                } else {
-                    // Integer pipeline: output bit depth must be >= source bit depth
-                    outputBits >= sourceBits
-                }
-            }
-            else -> false // Unknown output format cannot claim bit-perfect preservation
+        val isProvenTruncation = sourceBits > 0 && outputBits > 0 && (
+            (isFloatOutput && sourceBits > 24) || (!isFloatOutput && outputBits < sourceBits)
+        )
+        val bitDepthPreserved = sourceBits > 0 && outputBits > 0 && !isProvenTruncation &&
+            snapshot.actualOutput.bitDepth.confidence == Confidence.VERIFIED
+        if (sourceBits <= 0 || outputBits <= 0 || snapshot.actualOutput.bitDepth.confidence != Confidence.VERIFIED) {
+            hasUnknownOrInferredCritical = true
+            failureReasons.add("Actual hardware output bit depth or format is unknown or unverified")
         }
         val noLossyPcm = encodingCompatible && bitDepthPreserved
         evidence.add(BitPerfectEvidence("No Lossy PCM", noLossyPcm, EvidenceSource.OBOE_STREAM))
-        if (!noLossyPcm) {
+        if (isProvenTruncation) {
             failureReasons.add("PCM bit-depth truncation or lossy downconversion detected (Source: ${sourceBits}-bit, Output: ${outputBits}-bit ${if (isFloatOutput) "Float" else "Integer"})")
         }
 
-        // Rule 40: DSD Decimation Detection (DSD source decimated to PCM alters 1-bit bitstream)
+        // DSD Bitstream Integrity (Rule 40 & Option B: Android Audio HAL renders via PCM; native DSD bitstream unsupported)
         val isDsdSource = snapshot.source.encoding.value.contains("DSD", ignoreCase = true) ||
                          snapshot.source.encoding.value.contains("DSF", ignoreCase = true) ||
                          snapshot.source.encoding.value.contains("DFF", ignoreCase = true)
-        val dsdNotDecimated = !isDsdSource || snapshot.actualOutput.encoding.value.contains("DSD", ignoreCase = true)
-        evidence.add(BitPerfectEvidence("DSD Bitstream Integrity", dsdNotDecimated, EvidenceSource.OBOE_STREAM))
+        val dsdNotDecimated = !isDsdSource
+        evidence.add(
+            BitPerfectEvidence(
+                "DSD Bitstream Integrity",
+                dsdNotDecimated,
+                EvidenceSource.OBOE_STREAM,
+                if (isDsdSource) "Native DSD 1-bit bitstream unsupported on Android Audio HAL; decoded to PCM"
+                else "Source is linear PCM"
+            )
+        )
         if (!dsdNotDecimated) {
-            failureReasons.add("DSD 1-bit bitstream is decimated to PCM; native 1-bit stream cannot be preserved")
+            failureReasons.add("Native DSD bitstream is unsupported; decoded to PCM")
+            hasUnknownOrInferredCritical = true
+        }
+
+        // Fallback AudioTrack detection (P1 Requirement 31 & 32: bit-perfect must never survive fallback)
+        val isFallbackActive = snapshot.audioApi.value == AudioOutputApi.AUDIOTRACK ||
+                              snapshot.pipeline?.outputConversion?.contains("Fallback", ignoreCase = true) == true ||
+                              snapshot.pipeline?.outputConversion?.contains("DefaultAudioSink", ignoreCase = true) == true
+        evidence.add(
+            BitPerfectEvidence(
+                "Native Direct Path",
+                !isFallbackActive,
+                EvidenceSource.OBOE_STREAM,
+                if (isFallbackActive) "Fallback AudioTrack sink is active" else "Native Oboe direct stream is active"
+            )
+        )
+        if (isFallbackActive) {
+            failureReasons.add("Fallback AudioTrack sink is active; native direct stream lost")
+            hasUnknownOrInferredCritical = true
         }
 
         // 32. Direct HAL path is ACTUALLY active (runtime proof)
-        val directActive = snapshot.directPathActive.value && 
-                          (snapshot.directPathActive.confidence == Confidence.VERIFIED || snapshot.directPathActive.confidence == Confidence.HIGH_CONFIDENCE)
+        val directActive = !isFallbackActive && snapshot.directPathActive.value && snapshot.directPathActive.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Direct Path Active", directActive, snapshot.directPathActive.source))
         if (!directActive) {
-            failureReasons.add("Direct PCM HAL path is not actively confirmed")
-            hasUnknownOrInferredCritical = true
-        } else if (snapshot.directPathActive.confidence != Confidence.VERIFIED) {
+            failureReasons.add("Direct PCM HAL path is not verified")
             hasUnknownOrInferredCritical = true
         }
 
         // 33. Mixer state is definitely not active
-        val mixerStateKnown = snapshot.mixerPathState.confidence != Confidence.UNKNOWN
+        val mixerStateKnown = snapshot.mixerPathState.confidence == Confidence.VERIFIED
         val mixerNotActive = mixerStateKnown && snapshot.mixerPathActive.value == false
         evidence.add(BitPerfectEvidence("Mixer Inactive", mixerNotActive, snapshot.mixerPathActive.source))
         if (!mixerNotActive) {
-            failureReasons.add("AudioFlinger mixer path is active or mixer state is unknown")
+            failureReasons.add("AudioFlinger mixer path is active or mixer state is unverified")
             if (!mixerStateKnown) hasUnknownOrInferredCritical = true
         }
 
         // 34. No unknown critical telemetry
         val noUnknownTelemetry = !hasUnknownOrInferredCritical &&
-                                snapshot.activeRoute.confidence != Confidence.UNKNOWN &&
-                                snapshot.actualOutput.sampleRate.confidence != Confidence.UNKNOWN &&
-                                snapshot.source.sampleRate.confidence != Confidence.UNKNOWN
+                                snapshot.activeRoute.confidence == Confidence.VERIFIED &&
+                                snapshot.actualOutput.sampleRate.confidence == Confidence.VERIFIED &&
+                                snapshot.source.sampleRate.confidence == Confidence.VERIFIED &&
+                                snapshot.actualOutput.channels.confidence == Confidence.VERIFIED &&
+                                snapshot.source.channels.confidence == Confidence.VERIFIED &&
+                                snapshot.sharingMode.confidence == Confidence.VERIFIED &&
+                                snapshot.directPathActive.confidence == Confidence.VERIFIED
         evidence.add(BitPerfectEvidence("Telemetry Complete", noUnknownTelemetry, EvidenceSource.OBOE_STREAM))
         if (!noUnknownTelemetry) {
             failureReasons.add("Critical audio telemetry is unknown or unverified")
@@ -348,13 +392,41 @@ object BitPerfectVerifier {
         val allSatisfied = evidence.all { it.isSatisfied }
         val eligible = isEligible(snapshot)
 
+        val isDisqualified = !eligible ||
+            !routeVerified ||
+            snapshot.sharingMode.value != "EXCLUSIVE" ||
+            !snapshot.directPathActive.value ||
+            isFallbackActive ||
+            isDsdSource ||
+            (snapshot.actualOutput.sampleRate.value > 0 && snapshot.source.sampleRate.value > 0 && snapshot.actualOutput.sampleRate.value != snapshot.source.sampleRate.value) ||
+            (snapshot.actualOutput.channels.value > 0 && snapshot.source.channels.value > 0 && snapshot.actualOutput.channels.value != snapshot.source.channels.value) ||
+            isProvenTruncation ||
+            !encodingCompatible ||
+            !noResampler ||
+            !dspBypassed ||
+            signalTransformActive ||
+            !eqDisabled ||
+            !toneDisabled ||
+            !limiterDisabled ||
+            !ditherDisabled ||
+            !volUnity ||
+            !preampUnity ||
+            !replayGainUnity ||
+            !saturationDisabled ||
+            !spatialOff ||
+            !crossfeedOff ||
+            !balanceUnity ||
+            !noChannelTransform ||
+            (snapshot.mixerPathActive.value == true) ||
+            !isFresh
+
         val state = when {
             !eligible -> BitPerfectState.UNAVAILABLE
             !streamExists || !streamActive -> BitPerfectState.REQUESTED
+            isDisqualified -> BitPerfectState.UNAVAILABLE
             allSatisfied && !hasUnknownOrInferredCritical -> BitPerfectState.VERIFIED
-            hasUnknownOrInferredCritical && eligible && directActive -> BitPerfectState.ACTIVE_UNVERIFIED
+            hasUnknownOrInferredCritical -> BitPerfectState.ACTIVE_UNVERIFIED
             failureReasons.isNotEmpty() -> BitPerfectState.UNAVAILABLE
-            hasUnknownOrInferredCritical && eligible -> BitPerfectState.UNKNOWN
             else -> BitPerfectState.UNKNOWN
         }
 
@@ -368,11 +440,36 @@ object BitPerfectVerifier {
             else -> Confidence.INFERRED
         }
 
+        val tier = when (state) {
+            BitPerfectState.VERIFIED -> {
+                if (snapshot.activeRoute.value == AudioOutputRouteType.USB_DAC || snapshot.activeRoute.value == AudioOutputRouteType.USB_DEVICE) {
+                    BitPerfectTier.END_TO_END_BITPERFECT
+                } else {
+                    BitPerfectTier.DIRECT_PATH_VERIFIED
+                }
+            }
+            BitPerfectState.ACTIVE_UNVERIFIED -> {
+                if (noLossyPcm && noResampler && dspBypassed && !signalTransformActive) {
+                    if (outputBits == sourceBits && !isFloatOutput) BitPerfectTier.TRANSPORT_EXACT else BitPerfectTier.SAMPLE_EXACT
+                } else {
+                    BitPerfectTier.UNKNOWN
+                }
+            }
+            else -> {
+                if (noLossyPcm && noResampler && dspBypassed && !signalTransformActive && streamActive) {
+                    BitPerfectTier.SAMPLE_EXACT
+                } else {
+                    BitPerfectTier.UNKNOWN
+                }
+            }
+        }
+
         return BitPerfectVerificationResult(
             state = state,
             evidence = evidence,
             confidence = confidence,
-            failureReasons = failureReasons
+            failureReasons = failureReasons,
+            tier = tier
         )
     }
 

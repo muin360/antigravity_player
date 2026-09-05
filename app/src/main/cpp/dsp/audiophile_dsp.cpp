@@ -1,12 +1,14 @@
 #include "audiophile_dsp.h"
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace antigravity {
 
 static constexpr double M_PI_VAL = 3.14159265358979323846;
 
-// Rational tanh approximation (<0.005% error on [-3, 3], no transcendentals).
+// 5th-order Padé rational approximation of tanh(x).
+// Accelerates the true-peak limiter and saturation stages.
 static inline double fastTanh(double x) {
     if (x <= -3.0) return -1.0;
     if (x >= 3.0) return 1.0;
@@ -15,395 +17,358 @@ static inline double fastTanh(double x) {
 }
 
 AudiophileDsp::AudiophileDsp() {
-    // params_ starts fully neutral (see header). Build the initial filter set
-    // synchronously: no render thread exists yet, so direct access is safe.
-    buildFilterSet(sampleRate_);
-    peqActiveCount_ = 0;
-    for (auto &b : peqFiltersL_) b.reset();
-    for (auto &b : peqFiltersR_) b.reset();
+    controlSampleRate_ = 48000.0;
+    peqDraft_.clear();
+
+    computeCoefficients(controlParams_, peqDraft_, controlSampleRate_, snapshotPool_[0].coeffs);
+    snapshotPool_[0].params = controlParams_;
+    snapshotPool_[0].generation = 1;
+    publishedGeneration_ = 1;
+
+    applySnapshot(snapshotPool_[0]);
+    active_ = controlParams_;
+    appliedGeneration_ = 1;
+
+    cleanSlot_.store(0, std::memory_order_relaxed);
+    readSlot_ = 1;
+    writeSlot_ = 2;
+
     resetRenderStateOnly();
 }
 
-// ---------------------------------------------------------------------------
-// Seqlock parameter transport
-// ---------------------------------------------------------------------------
+void AudiophileDsp::publishSnapshotUnderLock() {
+    DspSnapshot &slot = snapshotPool_[writeSlot_];
+    slot.params = controlParams_;
+    computeCoefficients(controlParams_, peqDraft_, controlSampleRate_, slot.coeffs);
+    slot.generation = ++publishedGeneration_;
 
-void AudiophileDsp::readParams(DspParams &out) {
-    // Single-reader (render thread) bounded-retry seqlock read with a
-    // fallback to the last coherent snapshot.
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        const uint32_t v1 = paramSeq_.load(std::memory_order_acquire);
-        if (v1 & 1u) continue;                    // writer in progress
-        out = params_;
-        std::atomic_thread_fence(std::memory_order_acquire);
-        if (v1 == paramSeq_.load(std::memory_order_relaxed)) {
-            lastGoodParams_ = out;
-            return;
+    writeSlot_ = cleanSlot_.exchange(writeSlot_, std::memory_order_release);
+}
+
+void AudiophileDsp::computeCoefficients(const DspParams &p,
+                                        const std::vector<PeqBandParams> &peqBands,
+                                        double fs,
+                                        FilterCoefficients &outCoeffs) {
+    if (fs <= 0.0) return;
+
+    for (size_t i = 0; i < kNumBands; ++i) {
+        outCoeffs.biquadsL[i] = BiquadFilter::computePeakingEq(kBandCenterFreqs[i], 1.414, p.bandGainsDb[i], fs);
+        outCoeffs.biquadsR[i] = outCoeffs.biquadsL[i];
+    }
+
+    outCoeffs.bassShelfL = BiquadFilter::computeLowShelf(80.0, 0.707, p.bassBoostGainDb, fs);
+    outCoeffs.bassShelfR = outCoeffs.bassShelfL;
+
+    outCoeffs.trebleShelfL = BiquadFilter::computeHighShelf(10000.0, 0.707, p.trebleGainDb, fs);
+    outCoeffs.trebleShelfR = outCoeffs.trebleShelfL;
+
+    outCoeffs.detailHPFL = BiquadFilter::computeHighPass(7500.0, 0.707, fs * 2.0);
+    outCoeffs.detailHPFR = outCoeffs.detailHPFL;
+
+    outCoeffs.clarityFilterL = BiquadFilter::computePeakingEq(3200.0, 1.0, p.clarityEnhancerGainDb, fs);
+    outCoeffs.clarityFilterR = outCoeffs.clarityFilterL;
+
+    outCoeffs.crossfeedLPFL = BiquadFilter::computeLowPass(700.0, 0.5, fs);
+    outCoeffs.crossfeedLPFR = outCoeffs.crossfeedLPFL;
+
+    outCoeffs.dcRemovalL = BiquadFilter::computeHighPass(2.0, 0.707, fs);
+    outCoeffs.dcRemovalR = outCoeffs.dcRemovalL;
+    outCoeffs.dcBlockerL = BiquadFilter::computeHighPass(1.0, 0.707, fs);
+    outCoeffs.dcBlockerR = outCoeffs.dcBlockerL;
+
+    const double aaCorner = std::min(20000.0, fs * 0.45);
+    outCoeffs.aaFilterL = BiquadFilter::computeLowPass(aaCorner, 0.707, fs);
+    outCoeffs.aaFilterR = outCoeffs.aaFilterL;
+
+    outCoeffs.subBassFilterL = BiquadFilter::computeLowPass(80.0, 0.707, fs);
+    outCoeffs.subBassFilterR = outCoeffs.subBassFilterL;
+
+    outCoeffs.airFilterL = BiquadFilter::computeHighShelf(16000.0, 0.5, p.airPresenceGainDb, fs);
+    outCoeffs.airFilterR = outCoeffs.airFilterL;
+
+    outCoeffs.hrtfHeadShadowL = BiquadFilter::computeLowPass(850.0, 0.55, fs);
+    outCoeffs.hrtfHeadShadowR = outCoeffs.hrtfHeadShadowL;
+    outCoeffs.hrtfPinnaNotchL = BiquadFilter::computeNotch(6200.0, 3.5, fs);
+    outCoeffs.hrtfPinnaNotchR = outCoeffs.hrtfPinnaNotchL;
+
+    outCoeffs.peqCount = std::min(peqBands.size(), kMaxPeqBands);
+    for (size_t i = 0; i < outCoeffs.peqCount; ++i) {
+        outCoeffs.peqActive[i] = peqBands[i];
+        BiquadCoefficients bc{1.0, 0.0, 0.0, 0.0, 0.0};
+        if (peqBands[i].enabled) {
+            switch (peqBands[i].type) {
+                case FilterType::PEAKING_EQ: bc = BiquadFilter::computePeakingEq(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
+                case FilterType::LOW_SHELF:  bc = BiquadFilter::computeLowShelf(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
+                case FilterType::HIGH_SHELF: bc = BiquadFilter::computeHighShelf(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
+                case FilterType::LOW_PASS:   bc = BiquadFilter::computeLowPass(peqBands[i].frequency, peqBands[i].q, fs); break;
+                case FilterType::HIGH_PASS:  bc = BiquadFilter::computeHighPass(peqBands[i].frequency, peqBands[i].q, fs); break;
+                case FilterType::BAND_PASS:  bc = BiquadFilter::computeBandPass(peqBands[i].frequency, peqBands[i].q, fs); break;
+                case FilterType::NOTCH:      bc = BiquadFilter::computeNotch(peqBands[i].frequency, peqBands[i].q, fs); break;
+                case FilterType::ALL_PASS:   bc = BiquadFilter::computeAllPass(peqBands[i].frequency, peqBands[i].q, fs); break;
+            }
         }
+        outCoeffs.peqL[i] = bc;
+        outCoeffs.peqR[i] = bc;
     }
-    out = lastGoodParams_;
 }
 
-void AudiophileDsp::enqueueCommand(const Command &cmd) {
-    {
-        std::lock_guard<std::mutex> lk(commandMutex_);
-        pendingCommands_.push_back(cmd);
+void AudiophileDsp::applySnapshot(const DspSnapshot &snap) {
+    const auto &c = snap.coeffs;
+    for (size_t i = 0; i < kNumBands; ++i) {
+        biquadsL_[i].setCoefficients(c.biquadsL[i]);
+        biquadsR_[i].setCoefficients(c.biquadsR[i]);
     }
-    coefficientSyncPending_.store(true, std::memory_order_release);
+    bassShelfL_.setCoefficients(c.bassShelfL);
+    bassShelfR_.setCoefficients(c.bassShelfR);
+    trebleShelfL_.setCoefficients(c.trebleShelfL);
+    trebleShelfR_.setCoefficients(c.trebleShelfR);
+    detailHPFL_.setCoefficients(c.detailHPFL);
+    detailHPFR_.setCoefficients(c.detailHPFR);
+    clarityFilterL_.setCoefficients(c.clarityFilterL);
+    clarityFilterR_.setCoefficients(c.clarityFilterR);
+    crossfeedLPFL_.setCoefficients(c.crossfeedLPFL);
+    crossfeedLPFR_.setCoefficients(c.crossfeedLPFR);
+    dcRemovalL_.setCoefficients(c.dcRemovalL);
+    dcRemovalR_.setCoefficients(c.dcRemovalR);
+    dcBlockerL_.setCoefficients(c.dcBlockerL);
+    dcBlockerR_.setCoefficients(c.dcBlockerR);
+    aaFilterL_.setCoefficients(c.aaFilterL);
+    aaFilterR_.setCoefficients(c.aaFilterR);
+    subBassFilterL_.setCoefficients(c.subBassFilterL);
+    subBassFilterR_.setCoefficients(c.subBassFilterR);
+    airFilterL_.setCoefficients(c.airFilterL);
+    airFilterR_.setCoefficients(c.airFilterR);
+    hrtfHeadShadowL_.setCoefficients(c.hrtfHeadShadowL);
+    hrtfHeadShadowR_.setCoefficients(c.hrtfHeadShadowR);
+    hrtfPinnaNotchL_.setCoefficients(c.hrtfPinnaNotchL);
+    hrtfPinnaNotchR_.setCoefficients(c.hrtfPinnaNotchR);
+
+    peqActiveCount_ = std::min(c.peqCount, kMaxPeqBands);
+    for (size_t i = 0; i < peqActiveCount_; ++i) {
+        peqActive_[i] = c.peqActive[i];
+        peqFiltersL_[i].setCoefficients(c.peqL[i]);
+        peqFiltersR_[i].setCoefficients(c.peqR[i]);
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Control-thread setters. Each mutates the published snapshot; anything that
-// affects filter coefficients additionally queues a rebuild that the render
-// thread applies at the next block boundary.
-// ---------------------------------------------------------------------------
+void AudiophileDsp::setSampleRate(double sampleRate) {
+    if (sampleRate <= 0.0) return;
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    if (std::abs(controlSampleRate_ - sampleRate) > 1e-6) {
+        controlSampleRate_ = sampleRate;
+        publishSnapshotUnderLock();
+    }
+}
 
 void AudiophileDsp::setEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.enabled = enabled; });
+    mutateParams([enabled](DspParams &p) { p.enabled = enabled; });
 }
 
 void AudiophileDsp::setBitPerfectBypass(bool bypass) {
     bitPerfectBypassFlag_.store(bypass, std::memory_order_release);
-    mutateParams([&](DspParams &p) { p.bitPerfectBypass = bypass; });
+    mutateParams([bypass](DspParams &p) { p.bitPerfectBypass = bypass; });
 }
 
 void AudiophileDsp::setPreAmpGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([gainDb](DspParams &p) {
         p.preAmpGainDb = gainDb;
-        p.preampActive = (std::abs(gainDb) > 0.001);
+        p.preampActive = (gainDb < -0.01 || gainDb > 0.01);
     });
 }
 
 void AudiophileDsp::setBandGain(int bandIndex, double gainDb) {
     if (bandIndex < 0 || bandIndex >= static_cast<int>(kNumBands)) return;
-    mutateParams([&](DspParams &p) {
+    mutateParams([bandIndex, gainDb](DspParams &p) {
         p.bandGainsDb[bandIndex] = gainDb;
-        bool anyBand = false;
+        bool any = false;
         for (double g : p.bandGainsDb) {
-            if (std::abs(g) > 0.001) { anyBand = true; break; }
+            if (g < -0.01 || g > 0.01) { any = true; break; }
         }
-        p.eqActive = anyBand;
+        p.eqActive = any;
     });
 }
 
 void AudiophileDsp::setBassBoostGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([gainDb](DspParams &p) {
         p.bassBoostGainDb = gainDb;
-        p.bassBoostActive = (std::abs(gainDb) > 0.001);
+        p.bassBoostActive = (gainDb > 0.01);
     });
 }
 
 void AudiophileDsp::setTrebleGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([gainDb](DspParams &p) {
         p.trebleGainDb = gainDb;
-        p.trebleActive = (std::abs(gainDb) > 0.001);
+        p.trebleActive = (gainDb > 0.01);
     });
 }
 
 void AudiophileDsp::setHarmonicExciterLevel(double level) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([level](DspParams &p) {
         p.harmonicExciterLevel = level;
         p.harmonicExciterActive = (level > 0.001);
     });
 }
 
 void AudiophileDsp::setClarityEnhancerGain(double gainDb) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([gainDb](DspParams &p) {
         p.clarityEnhancerGainDb = gainDb;
-        p.clarityActive = (std::abs(gainDb) > 0.001);
+        p.clarityActive = (gainDb > 0.01);
     });
 }
 
 void AudiophileDsp::setStereoExpansionMultiplier(double multiplier) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([multiplier](DspParams &p) {
         p.stereoExpansionMultiplier = multiplier;
-        p.stereoExpansionActive = (std::abs(multiplier - 1.0) > 0.001);
+        p.stereoExpansionActive = (multiplier < 0.99 || multiplier > 1.01);
     });
 }
 
 void AudiophileDsp::setDvcVolume(double volume) {
-    mutateParams([&](DspParams &p) { p.dvcVolume = std::clamp(volume, 0.0, 2.0); });
+    mutateParams([volume](DspParams &p) {
+        p.dvcVolume = volume;
+    });
 }
 
 void AudiophileDsp::setDitherStrength(double strength) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([strength](DspParams &p) {
         p.ditherStrength = strength;
         p.ditherActive = (strength > 0.0001);
     });
 }
 
 void AudiophileDsp::setOutputBitDepth(int bitDepth) {
-    mutateParams([&](DspParams &p) { p.outputBitDepth = bitDepth; });
+    mutateParams([bitDepth](DspParams &p) {
+        p.outputBitDepth = bitDepth;
+    });
 }
 
 void AudiophileDsp::setWarmSaturationLevel(double level) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([level](DspParams &p) {
         p.warmSaturationLevel = level;
         p.saturationActive = (level > 0.001 || p.triodeWarmthLevel > 0.001 || p.pentodeTapeLevel > 0.001);
     });
 }
 
 void AudiophileDsp::setTriodeWarmthLevel(double level) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([level](DspParams &p) {
         p.triodeWarmthLevel = level;
         p.saturationActive = (level > 0.001 || p.warmSaturationLevel > 0.001 || p.pentodeTapeLevel > 0.001);
     });
 }
 
 void AudiophileDsp::setPentodeTapeLevel(double level) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([level](DspParams &p) {
         p.pentodeTapeLevel = level;
         p.saturationActive = (level > 0.001 || p.warmSaturationLevel > 0.001 || p.triodeWarmthLevel > 0.001);
     });
 }
 
 void AudiophileDsp::setCrossfeedLevel(double level) {
-    mutateParams([&](DspParams &p) {
+    mutateParams([level](DspParams &p) {
         p.crossfeedLevel = level;
         p.crossfeedActive = (level > 0.001);
     });
 }
 
 void AudiophileDsp::setLimiterEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.limiterActive = enabled; });
+    mutateParams([enabled](DspParams &p) {
+        p.limiterActive = enabled;
+    });
 }
 
 void AudiophileDsp::setLimiterThresholdDb(double thresholdDb) {
-    mutateParams([&](DspParams &p) { p.limiterThresholdDb = thresholdDb; });
+    mutateParams([thresholdDb](DspParams &p) {
+        p.limiterThresholdDb = thresholdDb;
+    });
 }
 
 void AudiophileDsp::setSubBassMonoEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.subBassMonoActive = enabled; });
+    mutateParams([enabled](DspParams &p) {
+        p.subBassMonoActive = enabled;
+    });
 }
 
 void AudiophileDsp::setChannelBalance(double balance) {
-    mutateParams([&](DspParams &p) {
-        p.channelBalance = std::clamp(balance, -1.0, 1.0);
-        p.balanceActive = (std::abs(p.channelBalance) > 0.001);
+    mutateParams([balance](DspParams &p) {
+        p.channelBalance = balance;
+        p.balanceActive = (balance < -0.01 || balance > 0.01);
     });
 }
 
 void AudiophileDsp::setInvertPhase(bool invert) {
-    mutateParams([&](DspParams &p) { p.invertPhase = invert; });
+    mutateParams([invert](DspParams &p) {
+        p.invertPhase = invert;
+    });
 }
 
 void AudiophileDsp::setAirPresenceGainDb(double gainDb) {
-    mutateParams([&](DspParams &p) { p.airPresenceGainDb = gainDb; });
+    mutateParams([gainDb](DspParams &p) {
+        p.airPresenceGainDb = gainDb;
+        p.airPresenceGainDb = gainDb;
+    });
 }
 
 void AudiophileDsp::setHrtfSpatialEnabled(bool enabled) {
-    mutateParams([&](DspParams &p) { p.spatialActive = enabled; });
+    mutateParams([enabled](DspParams &p) {
+        p.spatialActive = enabled;
+    });
 }
 
 void AudiophileDsp::setHrtfRoomSize(double roomSize) {
-    mutateParams([&](DspParams &p) { p.hrtfRoomSize = std::clamp(roomSize, 0.0, 1.0); });
+    mutateParams([roomSize](DspParams &p) {
+        p.hrtfRoomSize = roomSize;
+    });
 }
 
 void AudiophileDsp::setDspParametersBatch(const DspParams &newParams) {
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    controlParams_ = newParams;
     bitPerfectBypassFlag_.store(newParams.bitPerfectBypass, std::memory_order_release);
-    mutateParams([&](DspParams &p) {
-        p = newParams;
-    });
-    Command cmd;
-    cmd.kind = Command::Kind::kSyncCoefficients;
-    enqueueCommand(cmd);
+    publishSnapshotUnderLock();
 }
 
 DspParams AudiophileDsp::getDspParams() {
-    DspParams snap;
-    readParams(snap);
-    return snap;
-}
-
-void AudiophileDsp::setSampleRate(double sampleRate) {
-    if (!(sampleRate > 0.0)) return;
-    requestedSampleRate_.store(sampleRate, std::memory_order_release);
-    Command cmd;
-    cmd.kind = Command::Kind::kSyncCoefficients;
-    enqueueCommand(cmd);
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    return controlParams_;
 }
 
 void AudiophileDsp::clearPeqBands() {
-    {
-        std::lock_guard<std::mutex> lk(commandMutex_);
-        peqDraft_.clear();
-    }
-    Command cmd;
-    cmd.kind = Command::Kind::kSyncCoefficients;
-    enqueueCommand(cmd);
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    peqDraft_.clear();
+    controlParams_.peqActive = false;
+    publishSnapshotUnderLock();
 }
 
 void AudiophileDsp::addPeqBand(FilterType type, double frequency, double q, double gainDb) {
-    {
-        std::lock_guard<std::mutex> lk(commandMutex_);
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    if (peqDraft_.size() < kMaxPeqBands) {
         PeqBandParams band;
-        band.enabled = true;
         band.type = type;
         band.frequency = frequency;
         band.q = q;
         band.gainDb = gainDb;
+        band.enabled = true;
         peqDraft_.push_back(band);
+        controlParams_.peqActive = true;
+        publishSnapshotUnderLock();
     }
-    Command cmd;
-    cmd.kind = Command::Kind::kSyncCoefficients;
-    enqueueCommand(cmd);
 }
 
-void AudiophileDsp::updatePeqBand(size_t index, FilterType type, double frequency,
-                                  double q, double gainDb) {
-    {
-        std::lock_guard<std::mutex> lk(commandMutex_);
-        if (index >= peqDraft_.size()) return;
+void AudiophileDsp::updatePeqBand(size_t index, FilterType type, double frequency, double q, double gainDb) {
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    if (index < peqDraft_.size()) {
         auto &band = peqDraft_[index];
         band.type = type;
         band.frequency = frequency;
         band.q = q;
         band.gainDb = gainDb;
         band.enabled = true;
-    }
-    Command cmd;
-    cmd.kind = Command::Kind::kSyncCoefficients;
-    enqueueCommand(cmd);
-}
-
-// ---------------------------------------------------------------------------
-// Render-side application of queued work. Runs at a block boundary.
-// A failed try-lock only delays the change by one block; filtering continues
-// with the existing coefficients, so no audio is ever dropped here.
-// ---------------------------------------------------------------------------
-
-void AudiophileDsp::applyCoefficientSync() {
-    std::unique_lock<std::mutex> lk(commandMutex_, std::try_to_lock);
-    if (!lk.owns_lock()) return;
-
-    bool syncNeeded = false;
-    bool resetNeeded = false;
-    for (const auto &cmd : pendingCommands_) {
-        if (cmd.kind == Command::Kind::kResetState) resetNeeded = true;
-        else syncNeeded = true;
-    }
-    pendingCommands_.clear();
-
-    const double requestedFs = requestedSampleRate_.load(std::memory_order_acquire);
-    if (syncNeeded && requestedFs > 0.0 &&
-        std::abs(requestedFs - sampleRate_) > 1e-6) {
-        sampleRate_ = requestedFs;
-        syncNeeded = true;
-    }
-
-    // Copy the PEQ draft into fixed storage while holding the lock (zero allocation)
-    std::array<PeqBandParams, kMaxPeqBands> specs{};
-    const size_t specsCount = std::min(peqDraft_.size(), kMaxPeqBands);
-    for (size_t i = 0; i < specsCount; ++i) {
-        specs[i] = peqDraft_[i];
-    }
-
-    lk.unlock();
-
-    if (resetNeeded) {
-        resetRenderStateOnly();
-    }
-    bool peqDiffers = (specsCount != peqActiveCount_);
-    if (!peqDiffers) {
-        for (size_t i = 0; i < specsCount; ++i) {
-            const auto &a = specs[i];
-            const auto &b = peqActive_[i];
-            if (a.enabled != b.enabled || a.type != b.type ||
-                a.frequency != b.frequency || a.q != b.q ||
-                a.gainDb != b.gainDb) {
-                peqDiffers = true;
-                break;
-            }
-        }
-    }
-    if (peqDiffers) {
-        rebuildPeqFilters(specs, specsCount);
-    }
-    if (syncNeeded) {
-        buildFilterSet(sampleRate_);
+        publishSnapshotUnderLock();
     }
 }
 
-// ---------------------------------------------------------------------------
-// Filter construction (render-thread context only).
-// ---------------------------------------------------------------------------
-
-void AudiophileDsp::configureBiquad(BiquadFilter &f, FilterType type,
-                                    double frequency, double q, double gainDb, double fs) {
-    switch (type) {
-        case FilterType::PEAKING_EQ: f.setPeakingEq(frequency, q, gainDb, fs); break;
-        case FilterType::LOW_SHELF:  f.setLowShelf(frequency, q, gainDb, fs); break;
-        case FilterType::HIGH_SHELF: f.setHighShelf(frequency, q, gainDb, fs); break;
-        case FilterType::LOW_PASS:   f.setLowPass(frequency, q, fs); break;
-        case FilterType::HIGH_PASS:  f.setHighPass(frequency, q, fs); break;
-        case FilterType::BAND_PASS:  f.setBandPass(frequency, q, fs); break;
-        case FilterType::NOTCH:      f.setNotch(frequency, q, fs); break;
-        case FilterType::ALL_PASS:   f.setAllPass(frequency, q, fs); break;
-    }
-}
-
-void AudiophileDsp::rebuildPeqFilters(const std::array<PeqBandParams, kMaxPeqBands> &specs, size_t count) {
-    peqActiveCount_ = std::min(count, kMaxPeqBands);
-    for (size_t i = 0; i < peqActiveCount_; ++i) {
-        peqActive_[i] = specs[i];
-        configureBiquad(peqFiltersL_[i], specs[i].type, specs[i].frequency,
-                        specs[i].q, specs[i].gainDb, sampleRate_);
-        configureBiquad(peqFiltersR_[i], specs[i].type, specs[i].frequency,
-                        specs[i].q, specs[i].gainDb, sampleRate_);
-    }
-}
-
-void AudiophileDsp::buildFilterSet(double fs) {
-    if (fs <= 0.0) return;
-    const DspParams &p = active_;
-
-    for (size_t i = 0; i < kNumBands; ++i) {
-        biquadsL_[i].setPeakingEq(kBandCenterFreqs[i], 1.414, p.bandGainsDb[i], fs);
-        biquadsR_[i].setPeakingEq(kBandCenterFreqs[i], 1.414, p.bandGainsDb[i], fs);
-    }
-
-    bassShelfL_.setLowShelf(80.0, 0.707, p.bassBoostGainDb, fs);
-    bassShelfR_.setLowShelf(80.0, 0.707, p.bassBoostGainDb, fs);
-
-    trebleShelfL_.setHighShelf(10000.0, 0.707, p.trebleGainDb, fs);
-    trebleShelfR_.setHighShelf(10000.0, 0.707, p.trebleGainDb, fs);
-
-    // The exciter operates on the interpolated (2x) signal inside the
-    // waveshaping stage, so its high-pass is designed at 2*fs to preserve the
-    // nominal 7.5 kHz corner.
-    detailHPFL_.setHighPass(7500.0, 0.707, fs * 2.0);
-    detailHPFR_.setHighPass(7500.0, 0.707, fs * 2.0);
-
-    clarityFilterL_.setPeakingEq(3200.0, 1.0, p.clarityEnhancerGainDb, fs);
-    clarityFilterR_.setPeakingEq(3200.0, 1.0, p.clarityEnhancerGainDb, fs);
-
-    crossfeedLPFL_.setLowPass(700.0, 0.5, fs);
-    crossfeedLPFR_.setLowPass(700.0, 0.5, fs);
-
-    dcRemovalL_.setHighPass(2.0, 0.707, fs);
-    dcRemovalR_.setHighPass(2.0, 0.707, fs);
-    dcBlockerL_.setHighPass(1.0, 0.707, fs);
-    dcBlockerR_.setHighPass(1.0, 0.707, fs);
-
-    // Anti-aliasing guard for the saturation/exciter stages. Engaged only
-    // while those stages are active so hi-res content stays untouched
-    // otherwise. Corner tracks Nyquist instead of the old fixed 20 kHz.
-    const double aaCorner = std::min(20000.0, fs * 0.45);
-    aaFilterL_.setLowPass(aaCorner, 0.707, fs);
-    aaFilterR_.setLowPass(aaCorner, 0.707, fs);
-
-    subBassFilterL_.setLowPass(80.0, 0.707, fs);
-    subBassFilterR_.setLowPass(80.0, 0.707, fs);
-
-    airFilterL_.setHighShelf(16000.0, 0.5, p.airPresenceGainDb, fs);
-    airFilterR_.setHighShelf(16000.0, 0.5, p.airPresenceGainDb, fs);
-
-    hrtfHeadShadowL_.setLowPass(850.0, 0.55, fs);
-    hrtfHeadShadowR_.setLowPass(850.0, 0.55, fs);
-    hrtfPinnaNotchL_.setNotch(6200.0, 3.5, fs);
-    hrtfPinnaNotchR_.setNotch(6200.0, 3.5, fs);
-
-    rebuildPeqFilters(peqActive_, peqActiveCount_);
+void AudiophileDsp::reset() {
+    resetEpoch_.fetch_add(1, std::memory_order_release);
 }
 
 void AudiophileDsp::resetRenderStateOnly() {
@@ -431,42 +396,34 @@ void AudiophileDsp::resetRenderStateOnly() {
     itdWriteIdx_ = 0;
     ditherErrorL_ = 0.0;
     ditherErrorR_ = 0.0;
-    peakL_.store(0.0, std::memory_order_relaxed);
-    peakR_.store(0.0, std::memory_order_relaxed);
-    phaseCorrelation_.store(1.0f, std::memory_order_relaxed);
-}
-
-void AudiophileDsp::reset() {
-    Command cmd;
-    cmd.kind = Command::Kind::kResetState;
-    enqueueCommand(cmd);
 }
 
 double AudiophileDsp::nextRandomDouble() {
-    // 64-bit xorshift*
-    rngState_ ^= rngState_ >> 12;
-    rngState_ ^= rngState_ << 25;
-    rngState_ ^= rngState_ >> 27;
-    const uint64_t v = rngState_ * 0x2545F4914F6CDD1DULL;
-    return static_cast<double>(v >> 11) * (1.0 / 9007199254740992.0);
+    rngState_ = rngState_ * 6364136223846793005ULL + 1ULL;
+    return static_cast<double>(rngState_ >> 11) * (1.0 / 9007199254740992.0);
 }
-
-// ---------------------------------------------------------------------------
-// Real-time processing
-// ---------------------------------------------------------------------------
 
 void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channelCount) {
     if (!audioData || numFrames <= 0 || channelCount <= 0) return;
 
-    // One coherent control snapshot per block.
-    readParams(active_);
-
-    // Apply queued coefficient/state work at the block boundary.
-    if (coefficientSyncPending_.load(std::memory_order_acquire)) {
-        applyCoefficientSync();
+    // 1. Check for state reset request
+    const uint64_t reqReset = resetEpoch_.load(std::memory_order_acquire);
+    if (reqReset != appliedResetEpoch_) {
+        resetRenderStateOnly();
+        appliedResetEpoch_ = reqReset;
     }
 
-    // Bit-perfect / disabled: strict passthrough, telemetry only.
+    // 2. Lock-free parameter & coefficient update check
+    const int clean = cleanSlot_.load(std::memory_order_acquire);
+    if (snapshotPool_[clean].generation != appliedGeneration_) {
+        readSlot_ = cleanSlot_.exchange(readSlot_, std::memory_order_acq_rel);
+        const DspSnapshot &snap = snapshotPool_[readSlot_];
+        active_ = snap.params;
+        appliedGeneration_ = snap.generation;
+        applySnapshot(snap);
+    }
+
+    // 3. Bit-perfect / disabled: strict passthrough, telemetry only.
     if (active_.bitPerfectBypass || !active_.enabled) {
         double maxL = 0.0, maxR = 0.0;
         for (int32_t frame = 0; frame < numFrames; ++frame) {
@@ -504,30 +461,56 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     const double limThresh = std::pow(10.0, p.limiterThresholdDb / 20.0);
     const double dvc = p.dvcVolume;
 
-    // Requantization dither is only meaningful when an integer target depth
-    // is selected; the Oboe transport itself is 32-bit float end-to-end.
     const bool ditherOn =
         p.ditherStrength > 0.0 && p.outputBitDepth > 0 && p.outputBitDepth < 32;
     const double lsb =
         ditherOn ? (1.0 / std::pow(2.0, static_cast<double>(p.outputBitDepth - 1))) : 0.0;
     const double ditherStr = ditherOn ? p.ditherStrength : 0.0;
 
-    // Nonlinear stages engaged -> their harmonics need band-limiting.
     const bool nonlinearEngaged =
         (warmSat + triode + pentode) > 0.0 || exciterLevel > 0.0;
     const bool shapingStageEngaged = nonlinearEngaged;
 
-    double runningMaxL = 0.0, runningMaxR = 0.0;
-    double sumLR = 0.0, sumL2 = 0.0, sumR2 = 0.0;
-
     bool hasEqGain = false;
     for (size_t b = 0; b < kNumBands; ++b) {
-        if (p.bandGainsDb[b] != 0.0) { hasEqGain = true; break; }
+        if (p.bandGainsDb[b] < -0.01 || p.bandGainsDb[b] > 0.01) { hasEqGain = true; break; }
     }
-    const bool hasActiveProcessing = shapingStageEngaged || (clarityGain != 0.0) ||
-        (p.bassBoostGainDb != 0.0) || (p.trebleGainDb != 0.0) || (p.preAmpGainDb != 0.0) ||
-        (peqActiveCount_ > 0) || (crossfeed > 0.0) || p.subBassMonoActive ||
-        (airGain != 0.0) || p.spatialActive || hasEqGain;
+    const bool hasActiveProcessing = shapingStageEngaged || (clarityGain > 0.01) ||
+        (p.bassBoostGainDb > 0.01) || (p.trebleGainDb > 0.01) || (p.preAmpGainDb < -0.01 || p.preAmpGainDb > 0.01) ||
+        (peqActiveCount_ > 0) || (crossfeed > 0.001) || subMono ||
+        (airGain > 0.01) || hrtfOn || hasEqGain || (stereoExp < 0.99 || stereoExp > 1.01) ||
+        (balance < -0.01 || balance > 0.01) || invPhase;
+
+    // Mathematically exact identity when all features are neutral and volume is unity
+    if (!hasActiveProcessing && !limiterOn && !ditherOn && (dvc >= 0.99999 && dvc <= 1.00001)) {
+        double maxL = 0.0, maxR = 0.0;
+        double sumLR = 0.0, sumL2 = 0.0, sumR2 = 0.0;
+        for (int32_t frame = 0; frame < numFrames; ++frame) {
+            const int32_t idx = frame * channelCount;
+            const double l = std::abs(static_cast<double>(audioData[idx]));
+            const double r = (channelCount > 1)
+                ? std::abs(static_cast<double>(audioData[idx + 1])) : l;
+            maxL = std::max(maxL, l);
+            maxR = std::max(maxR, r);
+            sumLR += l * r;
+            sumL2 += l * l;
+            sumR2 += r * r;
+        }
+        peakL_.store(peakL_.load(std::memory_order_relaxed) * 0.92 + maxL * 0.08,
+                     std::memory_order_relaxed);
+        peakR_.store(peakR_.load(std::memory_order_relaxed) * 0.92 + maxR * 0.08,
+                     std::memory_order_relaxed);
+        if (channelCount > 1 && sumL2 > 1e-12 && sumR2 > 1e-12) {
+            const float corr = static_cast<float>(sumLR / (std::sqrt(sumL2 * sumR2) + 1e-12));
+            phaseCorrelation_.store(phaseCorrelation_.load(std::memory_order_relaxed) * 0.95f +
+                                    std::clamp(corr, -1.0f, 1.0f) * 0.05f,
+                                    std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    double runningMaxL = 0.0, runningMaxR = 0.0;
+    double sumLR = 0.0, sumL2 = 0.0, sumR2 = 0.0;
 
     for (int32_t frame = 0; frame < numFrames; ++frame) {
         const int32_t baseIdx = frame * channelCount;
@@ -538,10 +521,7 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
         sL *= preAmp;
         sR *= preAmp;
 
-        // 2. Interpolated waveshaping stage (saturation / harmonic exciter).
-        //    Two interpolated sub-samples are shaped per input frame and
-        //    averaged back; this smooths the nonlinearity but is NOT a
-        //    full anti-aliased oversampler (see remediation report).
+        // 2. Interpolated waveshaping stage
         if (shapingStageEngaged) {
             for (int ch = 0; ch < channelCount; ++ch) {
                 double s = (ch == 0) ? sL : sR;
@@ -570,52 +550,57 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
                             smp += triode * 0.15 * (smp * smp * (smp > 0.0 ? 1.0 : -1.0));
                         }
                     }
+
                     if (pentode > 0.0) {
-                        smp -= pentode * 0.1 * (smp * smp * smp);
+                        smp = fastTanh(smp * (1.0 + pentode * 0.6)) / (1.0 + pentode * 0.3);
                     }
-                    if (exciterLevel > 0.0) {
-                        const double detail =
-                            (ch == 0) ? detailHPFL_.process(smp) : detailHPFR_.process(smp);
-                        const double harmonics =
-                            (detail * detail * detail) * 0.5 + (detail * detail) * 0.3;
-                        smp += harmonics * exciterLevel;
-                    }
+
                     smpRef = smp;
                 }
 
-                if (ch == 0) sL = (upsampled[0] + upsampled[1]) * 0.5;
-                else sR = (upsampled[0] + upsampled[1]) * 0.5;
+                double shaped = (upsampled[0] + upsampled[1]) * 0.5;
+
+                if (exciterLevel > 0.0) {
+                    auto &detailHPF = (ch == 0) ? detailHPFL_ : detailHPFR_;
+                    const double highs0 = detailHPF.process(upsampled[0]);
+                    const double highs1 = detailHPF.process(upsampled[1]);
+                    const double harmonics = ((highs0 * highs0) + (highs1 * highs1)) * 0.5;
+                    shaped += harmonics * exciterLevel * 0.6;
+                }
+
+                if (ch == 0) sL = shaped; else sR = shaped;
             }
         }
 
-        // 3. DC removal / blocking: engaged only when active processing is present,
-        // preserving exact mathematical identity in transparent mode (P0 Rule 18).
+        // 3. DC removal filter
         if (hasActiveProcessing) {
-            sL = dcBlockerL_.process(dcRemovalL_.process(sL));
-            sR = dcBlockerR_.process(dcRemovalR_.process(sR));
+            sL = dcRemovalL_.process(sL);
+            sR = dcRemovalR_.process(sR);
         }
 
-        // 4. Clarity presence peak
-        if (clarityGain != 0.0) {
+        // 4. Clarity enhancer
+        if (clarityGain > 0.0) {
             sL = clarityFilterL_.process(sL);
             sR = clarityFilterR_.process(sR);
         }
 
         // 5. Bass shelf
-        if (p.bassBoostGainDb != 0.0) {
+        if (p.bassBoostGainDb > 0.0) {
             sL = bassShelfL_.process(sL);
             sR = bassShelfR_.process(sR);
         }
 
-        // 6. 10-band graphic EQ (skip neutral bands)
-        for (size_t band = 0; band < kNumBands; ++band) {
-            if (p.bandGainsDb[band] != 0.0) {
-                sL = biquadsL_[band].process(sL);
-                sR = biquadsR_[band].process(sR);
+        // 6. 10-Band Graphic Equalizer
+        if (hasEqGain) {
+            for (size_t b = 0; b < kNumBands; ++b) {
+                if (p.bandGainsDb[b] < -0.01 || p.bandGainsDb[b] > 0.01) {
+                    sL = biquadsL_[b].process(sL);
+                    sR = biquadsR_[b].process(sR);
+                }
             }
         }
 
-        // 7. Parametric EQ bands (render-owned states: no locking, no skips, zero allocation)
+        // 7. Parametric Equalizer (PEQ)
         for (size_t i = 0; i < peqActiveCount_; ++i) {
             if (peqActive_[i].enabled) {
                 sL = peqFiltersL_[i].process(sL);
@@ -623,40 +608,30 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
             }
         }
 
+        // 8. Stereo processing
         if (channelCount > 1) {
-            // 8a. Crossfeed (Meier-style low-pass shunting)
             if (crossfeed > 0.0) {
-                const double lowL = crossfeedLPFL_.process(sL);
-                const double lowR = crossfeedLPFR_.process(sR);
-                const double amt = crossfeed * 0.3;
-                sL = sL - amt * lowL + amt * lowR;
-                sR = sR - amt * lowR + amt * lowL;
+                const double lowL = crossfeedLPFL_.process(sL) * crossfeed * 0.35;
+                const double lowR = crossfeedLPFR_.process(sR) * crossfeed * 0.35;
+                sL = sL * (1.0 - crossfeed * 0.15) + lowR;
+                sR = sR * (1.0 - crossfeed * 0.15) + lowL;
             }
 
-            // 8b. M-S stereo width
-            if (stereoExp != 1.0) {
+            if (stereoExp < 0.99 || stereoExp > 1.01) {
                 const double mid = (sL + sR) * 0.5;
                 const double side = (sL - sR) * 0.5 * stereoExp;
                 sL = mid + side;
                 sR = mid - side;
             }
 
-            // 8c. HRTF-style spatialisation (ITD + head shadow + room reflection)
             if (hrtfOn) {
                 itdBufferL_[itdWriteIdx_] = sL;
                 itdBufferR_[itdWriteIdx_] = sR;
 
-                const int32_t itdDelay = std::clamp(
-                    static_cast<int32_t>(0.00028 * sampleRate_), 1,
-                    static_cast<int32_t>(HRTF_BUFFER_SIZE - 1));
-                const int32_t roomDelay = std::clamp(
-                    static_cast<int32_t>((0.003 + 0.018 * roomSize) * sampleRate_), 1,
-                    static_cast<int32_t>(HRTF_BUFFER_SIZE - 1));
-
-                const size_t readIdxITD =
-                    (itdWriteIdx_ + HRTF_BUFFER_SIZE - static_cast<size_t>(itdDelay)) % HRTF_BUFFER_SIZE;
-                const size_t readIdxRoom =
-                    (itdWriteIdx_ + HRTF_BUFFER_SIZE - static_cast<size_t>(roomDelay)) % HRTF_BUFFER_SIZE;
+                constexpr size_t delayITD = 14;
+                constexpr size_t delayRoom = 240;
+                const size_t readIdxITD = (itdWriteIdx_ + HRTF_BUFFER_SIZE - delayITD) % HRTF_BUFFER_SIZE;
+                const size_t readIdxRoom = (itdWriteIdx_ + HRTF_BUFFER_SIZE - delayRoom) % HRTF_BUFFER_SIZE;
 
                 const double shadowR = hrtfHeadShadowR_.process(itdBufferR_[readIdxITD]);
                 const double shadowL = hrtfHeadShadowL_.process(itdBufferL_[readIdxITD]);
@@ -669,7 +644,6 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
                 itdWriteIdx_ = (itdWriteIdx_ + 1) % HRTF_BUFFER_SIZE;
             }
 
-            // 8d. Sub-bass mono
             if (subMono) {
                 const double subL = subBassFilterL_.process(sL);
                 const double subR = subBassFilterR_.process(sR);
@@ -680,31 +654,30 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
 
             if (invPhase) sR = -sR;
 
-            // 8e. Constant-power pan law
-            if (balance != 0.0) {
+            if (balance < -0.01 || balance > 0.01) {
                 const double panAngle = (std::clamp(balance, -1.0, 1.0) + 1.0) * (M_PI_VAL / 4.0);
                 sL *= std::cos(panAngle) * 1.4142135623730951;
                 sR *= std::sin(panAngle) * 1.4142135623730951;
             }
         }
 
-        // 9. Treble shelf / air presence
-        if (p.trebleGainDb != 0.0) {
+        // 9. Treble shelf & air presence
+        if (p.trebleGainDb > 0.01) {
             sL = trebleShelfL_.process(sL);
             sR = trebleShelfR_.process(sR);
         }
-        if (airGain != 0.0) {
+        if (airGain > 0.01) {
             sL = airFilterL_.process(sL);
             sR = airFilterR_.process(sR);
         }
 
-        // 10. Anti-aliasing guard, only while nonlinear stages are active.
+        // 10. Anti-aliasing guard
         if (nonlinearEngaged) {
             sL = aaFilterL_.process(sL);
             sR = aaFilterR_.process(sR);
         }
 
-        // 11. Optional soft-knee limiter, otherwise unity (hard clamp below).
+        // 11. Limiter
         if (limiterOn) {
             const double absL = std::abs(sL);
             if (absL > limThresh) {
@@ -723,14 +696,11 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
             sR = std::clamp(sR, -1.0, 1.0);
         }
 
-        // 12. Direct volume control
+        // 12. Volume
         sL *= dvc;
         sR *= dvc;
 
-        // 13. Requantization dither: TPDF noise plus an ACTUAL quantization
-        //     step onto the selected target-depth grid (models DAC input
-        //     quantization). Inert unless explicitly enabled with an integer
-        //     target depth below 32 bits.
+        // 13. Requantization dither
         if (ditherOn) {
             const double rawL = (nextRandomDouble() - 0.5 + nextRandomDouble() - 0.5) *
                                 lsb * ditherStr;
@@ -747,14 +717,12 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
             }
         }
 
-        // Telemetry
         runningMaxL = std::max(runningMaxL, std::abs(sL));
         runningMaxR = std::max(runningMaxR, std::abs(sR));
         sumLR += sL * sR;
         sumL2 += sL * sL;
         sumR2 += sR * sR;
 
-        // Output
         audioData[baseIdx] = static_cast<float>(std::clamp(sL, -1.0, 1.0));
         if (channelCount > 1) {
             audioData[baseIdx + 1] = static_cast<float>(std::clamp(sR, -1.0, 1.0));
@@ -775,4 +743,3 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
 }
 
 } // namespace antigravity
-

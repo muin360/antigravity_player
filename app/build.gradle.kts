@@ -71,11 +71,13 @@ android {
     buildTypes {
         release {
             val releaseKeystore = signingConfigs.getByName("release").storeFile
-            if (releaseKeystore?.exists() == true) {
-                signingConfig = signingConfigs.getByName("release")
-            } else {
-                signingConfig = signingConfigs.getByName("debug")
+            if (releaseKeystore?.exists() != true) {
+                throw GradleException(
+                    "Production release signing failed-closed: missing release keystore at '${releaseKeystore?.absolutePath}'. " +
+                    "Release builds must never fall back to debug credentials."
+                )
             }
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -152,3 +154,35 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
+
+val releaseConfig = android.signingConfigs.getByName("release")
+val releaseKeystoreFile = releaseConfig.storeFile
+val releaseStorePassword = releaseConfig.storePassword
+val releaseKeyAlias = releaseConfig.keyAlias
+val releaseKeyPassword = releaseConfig.keyPassword
+
+tasks.register("validateReleaseSigning") {
+    description = "Enforces fail-closed release signing validation. Fails build if release keystore or credentials are missing."
+    val storeFile = releaseKeystoreFile
+    val storePass = releaseStorePassword
+    val alias = releaseKeyAlias
+    val keyPass = releaseKeyPassword
+    doLast {
+        if (storeFile == null || !storeFile.exists()) {
+            throw GradleException(
+                "Release build failed-closed: Release keystore file is missing at '${storeFile?.absolutePath}'. " +
+                "Production release builds must never fall back to debug signing."
+            )
+        }
+        if (storePass.isNullOrEmpty() || alias.isNullOrEmpty() || keyPass.isNullOrEmpty()) {
+            throw GradleException(
+                "Release build failed-closed: Release signing credentials (storePassword, keyAlias, keyPassword) are incomplete."
+            )
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("packageRelease") || it.name.startsWith("assembleRelease") }.configureEach {
+    dependsOn("validateReleaseSigning")
+}
+

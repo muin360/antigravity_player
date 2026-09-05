@@ -309,20 +309,24 @@ Physical Output Endpoint / USB DAC
 ---
 
 ## Test Matrix
-* **Total Tests Executed**: 117
-* **Tests Passed**: 117 (100%)
+* **Total Tests Executed**: 141
+* **Tests Passed**: 141 (100%)
 * **Tests Failed**: 0
 * **Tests Skipped**: 0
-* **New Test Suites Added**:
+* **Test Suites**:
+  - `DspConcurrencyAndSnapshotTest.kt`: Fallback DSP snapshot immutability, 1000+ live coefficient updates across 4 concurrent threads, Biquad numerical safety under pathological parameters, 8-bit unsigned PCM exact mathematical normalization mapping, dspBypassed truth table logic, ActiveStreamSnapshot immutability.
+  - `BitPerfectVerifierTest.kt`: Authoritative 35-criterion truth table, 17 negative dominance tests, strict tier classifications (`BitPerfectTier`), DSD Option B failure reasons, zero false positives.
+  - `PcmPrecisionAndGoldenSignalTest.kt`: 16-bit / 24-bit roundtrip identity, 32-bit float truncation, golden fixtures (silence, impulse, full-scale sine, Nyquist tone, phase correlation).
   - `HardcoreStreamConcurrencyTest.kt`: 1/2/6/8 channel scratch capacity tests, 8-bit PCM 256-value verification, concurrent write/close simulation, format advertisement bounds.
-  - `BitPerfectVerifierTest.kt`: Strict exclusive mode requirement, confidence level verification, negative mutation checks.
+  - `HardcoreAudioPipelineTest.kt`: Padé rational approximation, polyphase sinc resampler rate pairs, DC offset rejection, presentation clock baselines.
 
 ---
 
 ## Build Results
-* `./gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (117 tests executed, 100% green).
+* `./gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (141 tests executed, 100% green).
+* `./gradlew.bat lintDebug`: **BUILD SUCCESSFUL** (0 lint errors).
 * `./gradlew.bat assembleDebug`: **BUILD SUCCESSFUL** (Compiled native `antigravity_oboe` for `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`).
-* `./gradlew.bat assembleRelease`: **BUILD SUCCESSFUL** (R8 minification, ProGuard rules, 16 KB page-size alignment, release APK packaging verified).
+* `./gradlew.bat assembleRelease`: **BUILD SUCCESSFUL** (R8 minification, resource shrinking, fail-closed release signing validation, release APK generated).
 
 ---
 

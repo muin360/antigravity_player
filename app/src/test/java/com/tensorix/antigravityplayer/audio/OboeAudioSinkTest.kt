@@ -17,14 +17,12 @@ class OboeAudioSinkTest {
 
     @org.junit.Before
     fun setUp() {
-        OboeAudioSink.currentActiveHandle = 0L
-        OboeAudioSink.currentStreamInfo = null
+        OboeAudioSink.activeStreamSnapshot = null
     }
 
     @org.junit.After
     fun tearDown() {
-        OboeAudioSink.currentActiveHandle = 0L
-        OboeAudioSink.currentStreamInfo = null
+        OboeAudioSink.activeStreamSnapshot = null
     }
 
     @Test

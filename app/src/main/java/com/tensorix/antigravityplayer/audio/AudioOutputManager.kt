@@ -260,19 +260,28 @@ class AudioOutputManager(
     }
 
     fun scanOutputStateInternal(trackInfo: AudioTrackInfo? = null, isDspActive: Boolean = true): AudioOutputState {
-        // Memo gate (P0 Rule 17): comprehensive invalidation key containing all
+        // Memo gate (P0 Rule 17 / P1 Requirement 24): comprehensive invalidation key containing all
         // runtime parameters capable of altering the canonical verification state.
-        val nativeInfoNow = OboeAudioSink.currentStreamInfo
-        val activeHandle = OboeAudioSink.currentActiveHandle
+        val activeSnapshot = OboeAudioSink.activeStreamSnapshot
+        val nativeInfoNow = activeSnapshot?.info
+        val activeHandle = activeSnapshot?.handle ?: 0L
+        val streamGeneration = activeSnapshot?.generation ?: 0L
+        val audioEpoch = activeSnapshot?.epoch ?: 0L
         val service = PlaybackService.instance
+        val dsp = service?.dspProcessor
         val bitPerfectRequested = service?.bitPerfectMode?.value ?: false
-        val dspBypass = service?.dspProcessor?.isBitPerfectBypass ?: false
+        val dspBypass = dsp?.isBitPerfectBypass ?: false
+        val dspGen = dsp?.activeSnapshot?.generation ?: 0L
+        val dspVol = dsp?.dvcVolume ?: 1.0f
+        val dspRg = dsp?.replayGainMultiplier ?: 1.0f
+        val dspLimiter = dsp?.isLimiterActive ?: false
+        val dspDither = dsp?.isDitherActive ?: false
         val key = listOf(
             trackInfo?.title, trackInfo?.artist, trackInfo?.sampleRateHz,
             trackInfo?.bitDepth, trackInfo?.codec, isDspActive,
-            activeHandle,
+            activeHandle, streamGeneration, audioEpoch,
             nativeInfoNow?.deviceId, nativeInfoNow?.sharingMode,
-            nativeInfoNow?.streamGeneration,
+            nativeInfoNow?.api,
             nativeInfoNow?.sampleRate,
             nativeInfoNow?.channelCount,
             nativeInfoNow?.formatId,
@@ -282,7 +291,12 @@ class AudioOutputManager(
             nativeInfoNow?.underrunCount,
             bitPerfectRequested,
             dspBypass,
-            cachedRoutes.size
+            dspGen,
+            dspVol,
+            dspRg,
+            dspLimiter,
+            dspDither,
+            cachedRoutes.map { "${it.routeType}_${it.deviceName}" }
         )
         if (key == memoKey) return memoState ?: scanOutputStateUncached(trackInfo, isDspActive)
         val state = scanOutputStateUncached(trackInfo, isDspActive)

@@ -16,6 +16,14 @@ enum class FilterType {
     ALL_PASS = 7
 };
 
+struct BiquadCoefficients {
+    double b0 = 1.0;
+    double b1 = 0.0;
+    double b2 = 0.0;
+    double a1 = 0.0;
+    double a2 = 0.0;
+};
+
 /**
  * 64-bit Double Precision Direct Form II Transposed Biquad Filter
  * Mathematically stable, denormal-flushed, low phase noise filter
@@ -24,6 +32,24 @@ class BiquadFilter {
 public:
     BiquadFilter();
     ~BiquadFilter() = default;
+
+    static BiquadCoefficients computePeakingEq(double frequency, double q, double gainDb, double sampleRate);
+    static BiquadCoefficients computeLowShelf(double frequency, double q, double gainDb, double sampleRate);
+    static BiquadCoefficients computeHighShelf(double frequency, double q, double gainDb, double sampleRate);
+    static BiquadCoefficients computeLowPass(double frequency, double q, double sampleRate);
+    static BiquadCoefficients computeHighPass(double frequency, double q, double sampleRate);
+    static BiquadCoefficients computeBandPass(double frequency, double q, double sampleRate);
+    static BiquadCoefficients computeNotch(double frequency, double q, double sampleRate);
+    static BiquadCoefficients computeAllPass(double frequency, double q, double sampleRate);
+
+    void setCoefficients(const BiquadCoefficients &c) {
+        b0_ = c.b0; b1_ = c.b1; b2_ = c.b2;
+        a1_ = c.a1; a2_ = c.a2;
+    }
+
+    BiquadCoefficients getCoefficients() const {
+        return {b0_, b1_, b2_, a1_, a2_};
+    }
 
     void setPeakingEq(double frequency, double q, double gainDb, double sampleRate);
     void setLowShelf(double frequency, double q, double gainDb, double sampleRate);

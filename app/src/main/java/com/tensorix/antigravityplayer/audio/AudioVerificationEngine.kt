@@ -17,7 +17,8 @@ object AudioVerificationEngine {
     ): CanonicalAudioRuntimeSnapshot {
         val isBitPerfectRequested = !isDspActive && (dspProcessor?.isBitPerfectBypass == true)
         val hardwareReport = HardwareHiFiVerifier.probeHardwareState(context, trackInfo.sampleRateHz, trackInfo.bitDepth, isBitPerfectRequested)
-        val nativeInfo = OboeAudioSink.currentStreamInfo
+        val activeSnapshot = OboeAudioSink.activeStreamSnapshot
+        val nativeInfo = activeSnapshot?.info
 
         // 1. Source Format
         val source = AudioFormatSnapshot(
@@ -161,7 +162,7 @@ object AudioVerificationEngine {
 
         val nativeStreamSnapshot = nativeInfo?.let {
             NativeStreamSnapshot(
-                handle = OboeAudioSink.currentActiveHandle,
+                handle = activeSnapshot?.handle ?: 0L,
                 state = it.state,
                 isStarted = it.isStarted,
                 sampleRate = it.sampleRate,
@@ -177,22 +178,27 @@ object AudioVerificationEngine {
                 confidence = Confidence.VERIFIED,
                 bitDepth = it.bitDepth,
                 channelMask = it.channelMask,
-                streamGeneration = it.streamGeneration,
+                streamGeneration = activeSnapshot?.generation ?: it.streamGeneration,
                 apiId = it.apiId,
                 sharingModeId = it.sharingModeId,
                 formatId = it.formatId
             )
         }
 
+        val hasGainMod = dspProcessor != null && !dspProcessor.isBitPerfectBypass && isDspActive &&
+            (dspProcessor.dvcVolume < 0.999f || dspProcessor.dvcVolume > 1.001f ||
+             Math.abs(dspProcessor.preAmpGainDb) > 0.01 ||
+             Math.abs(dspProcessor.replayGainMultiplier - 1.0f) > 0.01f)
+
         val pipelineSnapshot = SignalProcessingPipelineSnapshot(
             sourcePcm = source,
             decoderConversion = "32-bit Float",
             dspConversion = "64-bit Double",
-            isDspBypassed = !isDspActive,
+            isDspBypassed = !isDspActive || dspProcessor?.isBitPerfectBypass == true,
             resamplerState = resamplerStateValue,
             channelRemapActive = false,
-            softwareGainActive = dspProcessor != null && dspProcessor.dvcVolume < 0.999 && !isDspActive,
-            ditherActive = dspProcessor != null && dspProcessor.ditherStrength > 0.001 && isDspActive,
+            softwareGainActive = hasGainMod,
+            ditherActive = dspProcessor != null && !dspProcessor.isBitPerfectBypass && isDspActive && dspProcessor.ditherStrength > 0.001,
             outputConversion = actual.encoding.value,
             dacEndpoint = dacState.modelName.value
         )
@@ -207,14 +213,14 @@ object AudioVerificationEngine {
             activeRoute = routeEvidence,
             audioApi = apiEvidence,
             sharingMode = AudioEvidence(
-                nativeInfo?.sharingMode ?: if (isDirectActive) "EXCLUSIVE" else "SHARED",
+                nativeInfo?.sharingMode ?: "SHARED",
                 if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.AUDIO_TRACK,
-                if (nativeInfo != null) Confidence.VERIFIED else Confidence.HIGH_CONFIDENCE
+                if (nativeInfo != null) Confidence.VERIFIED else Confidence.UNKNOWN
             ),
             performanceMode = AudioEvidence(
-                nativeInfo?.performanceMode ?: "LOW_LATENCY",
-                if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.HAL_PARAMETER,
-                if (nativeInfo != null) Confidence.VERIFIED else Confidence.HIGH_CONFIDENCE
+                nativeInfo?.performanceMode ?: "NONE",
+                if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.AUDIO_TRACK,
+                if (nativeInfo != null) Confidence.VERIFIED else Confidence.UNKNOWN
             ),
             directPathActive = AudioEvidence(isDirectActive, if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.HAL_PARAMETER, directConfidence),
             directPathState = AudioEvidence(directPathState, if (nativeInfo != null) EvidenceSource.OBOE_STREAM else EvidenceSource.HAL_PARAMETER, directConfidence),

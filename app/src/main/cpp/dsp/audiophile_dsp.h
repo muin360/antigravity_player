@@ -10,19 +10,22 @@
 namespace antigravity {
 
 // ---------------------------------------------------------------------------
-// Concurrency model (see docs/final-forensic-remediation-report.md):
+// Lock-Free Triple-Buffer Parameter & Coefficient Concurrency Model:
 //
-//  * Scalar parameters live in one POD snapshot (DspParams) exchanged through
-//    a seqlock: the control thread publishes complete updates, the render
-//    thread takes one coherent snapshot per block. No locks on the read path.
+//  * Control thread computes complete parameters and filter coefficients
+//    under paramWriteMutex_ into an isolated write slot of a 3-slot pool.
 //
-//  * Filter COEFFICIENT changes are queued as commands. The render thread
-//    drains the queue at a block boundary and rebuilds coefficients itself.
-//    A failed try-lock only DELAYS coefficient application - filtering never
-//    stops, so no audio can be dropped while the UI mutates parameters.
+//  * Once completely built, the write slot is atomically exchanged with
+//    cleanSlot_ (release semantics).
 //
-//  * The render thread is the only writer of all filter state (z1/z2),
-//    telemetry accumulators and dither state.
+//  * The render thread checks cleanSlot_ at the start of each block. If the
+//    generation differs from appliedGeneration_, it exchanges its read slot
+//    with cleanSlot_ (acquire semantics) and applies the immutable coefficients.
+//
+//  * Mathematical proof of lock-freedom:
+//    {readSlot_, writeSlot_, cleanSlot_} are always a permutation of {0, 1, 2}.
+//    The render thread NEVER reads a slot currently being written by the control
+//    thread, NEVER acquires a mutex, and NEVER allocates heap memory.
 // ---------------------------------------------------------------------------
 
 struct PeqBandParams {
@@ -37,7 +40,7 @@ struct DspParams {
     bool enabled = true;
     bool bitPerfectBypass = false;
 
-    // Independent feature active flags (Rule 8)
+    // Independent feature active flags
     bool eqActive = false;
     bool autoEqActive = false;
     bool peqActive = false;
@@ -58,7 +61,7 @@ struct DspParams {
     bool preampActive = false;
 
     // Neutral-by-default signal chain: with no user adjustments
-    // the DSP is bit-transparent apart from the final safety clamp.
+    // the DSP is bit-transparent.
     double preAmpGainDb = 0.0;
     double bassBoostGainDb = 0.0;
     double trebleGainDb = 0.0;
@@ -79,6 +82,33 @@ struct DspParams {
     double airPresenceGainDb = 0.0;
     double hrtfRoomSize = 0.5;
     double bandGainsDb[10] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+};
+
+struct FilterCoefficients {
+    std::array<BiquadCoefficients, 10> biquadsL{};
+    std::array<BiquadCoefficients, 10> biquadsR{};
+    BiquadCoefficients bassShelfL{}, bassShelfR{};
+    BiquadCoefficients trebleShelfL{}, trebleShelfR{};
+    BiquadCoefficients detailHPFL{}, detailHPFR{};
+    BiquadCoefficients clarityFilterL{}, clarityFilterR{};
+    BiquadCoefficients crossfeedLPFL{}, crossfeedLPFR{};
+    BiquadCoefficients airFilterL{}, airFilterR{};
+    BiquadCoefficients dcRemovalL{}, dcRemovalR{};
+    BiquadCoefficients dcBlockerL{}, dcBlockerR{};
+    BiquadCoefficients aaFilterL{}, aaFilterR{};
+    BiquadCoefficients subBassFilterL{}, subBassFilterR{};
+    BiquadCoefficients hrtfHeadShadowL{}, hrtfHeadShadowR{};
+    BiquadCoefficients hrtfPinnaNotchL{}, hrtfPinnaNotchR{};
+    size_t peqCount = 0;
+    std::array<PeqBandParams, 32> peqActive{};
+    std::array<BiquadCoefficients, 32> peqL{};
+    std::array<BiquadCoefficients, 32> peqR{};
+};
+
+struct DspSnapshot {
+    uint64_t generation = 0;
+    DspParams params{};
+    FilterCoefficients coeffs{};
 };
 
 class AudiophileDsp {
@@ -115,7 +145,7 @@ public:
     void setHrtfSpatialEnabled(bool enabled);
     void setHrtfRoomSize(double roomSize);
 
-    // Batch parameter mutator (atomic update for all parameters in one seqlock cycle)
+    // Batch parameter mutator
     void setDspParametersBatch(const DspParams &newParams);
     DspParams getDspParams();
 
@@ -133,61 +163,51 @@ public:
     void reset();
 
 private:
-    struct Command {
-        enum class Kind : uint8_t {
-            kSyncCoefficients,   // rebuild every filter from current params
-            kResetState          // clear all filter/delay state
-        };
-        Kind kind = Kind::kSyncCoefficients;
-    };
-
     static constexpr size_t kNumBands = 10;
+    static constexpr size_t kMaxPeqBands = 32;
     static constexpr size_t HRTF_BUFFER_SIZE = 2048;
 
-    // ---- Seqlock parameter publisher -------------------------------------
     template <typename F>
     void mutateParams(F &&mutator) {
         std::lock_guard<std::mutex> lk(paramWriteMutex_);
-        const uint32_t s = paramSeq_.load(std::memory_order_relaxed);
-        paramSeq_.store(s + 1u, std::memory_order_release);      // odd: writing
-        mutator(params_);
-        std::atomic_thread_fence(std::memory_order_release);
-        paramSeq_.store(s + 2u, std::memory_order_release);      // even: stable
-        coefficientSyncPending_.store(true, std::memory_order_release);
+        mutator(controlParams_);
+        publishSnapshotUnderLock();
     }
 
-    void readParams(DspParams &out);       // render thread
-    static constexpr size_t kMaxPeqBands = 32;
+    void publishSnapshotUnderLock();
+    static void computeCoefficients(const DspParams &p,
+                                    const std::vector<PeqBandParams> &peqBands,
+                                    double fs,
+                                    FilterCoefficients &outCoeffs);
 
-    void enqueueCommand(const Command &cmd);
-    void applyCoefficientSync();           // render thread, block boundary
-    void buildFilterSet(double fs);        // render thread, helper of the above
-    void rebuildPeqFilters(const std::array<PeqBandParams, kMaxPeqBands> &specs, size_t count); // render thread
-    void resetRenderStateOnly();           // render thread (or pre-render ctor)
-    double nextRandomDouble();             // render thread
-    static void configureBiquad(BiquadFilter &f, FilterType type,
-                                double frequency, double q, double gainDb, double fs);
+    void applySnapshot(const DspSnapshot &snap);
+    void resetRenderStateOnly();
+    double nextRandomDouble();
 
     static constexpr std::array<double, 10> kBandCenterFreqs = {
         31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0
     };
 
-    // ---- Control-side storage --------------------------------------------
+    // ---- Control-side state (guarded by paramWriteMutex_) -----------------
     std::mutex paramWriteMutex_;
-    std::atomic<uint32_t> paramSeq_{0};
-    DspParams params_{};
-    DspParams lastGoodParams_{};           // reader fallback (render thread only)
+    DspParams controlParams_{};
+    std::vector<PeqBandParams> peqDraft_;
+    double controlSampleRate_ = 48000.0;
+    uint64_t publishedGeneration_ = 0;
 
-    std::mutex commandMutex_;
-    std::vector<Command> pendingCommands_;
-    std::vector<PeqBandParams> peqDraft_;  // guarded by commandMutex_
+    // ---- Lock-Free Triple Buffer Exchange ---------------------------------
+    std::array<DspSnapshot, 3> snapshotPool_{};
+    std::atomic<int> cleanSlot_{0};
+    int writeSlot_ = 2;
 
     std::atomic<bool> bitPerfectBypassFlag_{false};
+    std::atomic<uint64_t> resetEpoch_{0};
 
-    // ---- Render-thread-owned state ---------------------------------------
-    double sampleRate_ = 48000.0;
-    std::atomic<double> requestedSampleRate_{48000.0};
-    DspParams active_{};                   // last coherent snapshot used
+    // ---- Render-thread-owned state (ONLY accessed by process()) -----------
+    int readSlot_ = 1;
+    uint64_t appliedGeneration_ = 0;
+    uint64_t appliedResetEpoch_ = 0;
+    DspParams active_{};
 
     std::array<BiquadFilter, kNumBands> biquadsL_;
     std::array<BiquadFilter, kNumBands> biquadsR_;
@@ -205,8 +225,8 @@ private:
     BiquadFilter hrtfPinnaNotchL_, hrtfPinnaNotchR_;
 
     size_t peqActiveCount_ = 0;
-    std::array<PeqBandParams, kMaxPeqBands> peqActive_{};     // fixed preallocated spec set
-    std::array<BiquadFilter, kMaxPeqBands> peqFiltersL_{};    // fixed parallel runtime states
+    std::array<PeqBandParams, kMaxPeqBands> peqActive_{};
+    std::array<BiquadFilter, kMaxPeqBands> peqFiltersL_{};
     std::array<BiquadFilter, kMaxPeqBands> peqFiltersR_{};
 
     // Oversampling history (interpolated waveshaping stage)
@@ -227,8 +247,6 @@ private:
     std::atomic<double> peakL_{0.0};
     std::atomic<double> peakR_{0.0};
     std::atomic<float> phaseCorrelation_{1.0f};
-
-    std::atomic<bool> coefficientSyncPending_{false};
 };
 
 } // namespace antigravity

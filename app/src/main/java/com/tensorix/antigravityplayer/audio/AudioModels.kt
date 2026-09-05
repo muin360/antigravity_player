@@ -178,8 +178,17 @@ data class BitPerfectEvidence(
     val value: String = ""
 )
 
+enum class BitPerfectTier(val label: String) {
+    UNKNOWN("Unknown Tier"),
+    SAMPLE_EXACT("Sample-Value Exact"),
+    TRANSPORT_EXACT("Transport Format Exact"),
+    DIRECT_PATH_VERIFIED("Direct HAL Path Verified"),
+    END_TO_END_BITPERFECT("End-to-End Bit-Perfect Verified")
+}
+
 data class BitPerfectVerificationResult(
     val state: BitPerfectState,
+    val tier: BitPerfectTier = BitPerfectTier.UNKNOWN,
     val evidence: List<BitPerfectEvidence>,
     val confidence: Confidence,
     val failureReasons: List<String>
