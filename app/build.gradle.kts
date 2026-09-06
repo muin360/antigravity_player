@@ -22,10 +22,21 @@ android {
     signingConfigs {
         create("release") {
             val props = project.properties
-            storeFile = file(props["ANTIGRAVITY_RELEASE_STORE_FILE"] as? String ?: "release.keystore")
-            storePassword = props["ANTIGRAVITY_RELEASE_STORE_PASSWORD"] as? String ?: ""
-            keyAlias = props["ANTIGRAVITY_RELEASE_KEY_ALIAS"] as? String ?: ""
-            keyPassword = props["ANTIGRAVITY_RELEASE_KEY_PASSWORD"] as? String ?: ""
+            val env = System.getenv()
+            storeFile = file(
+                props["ANTIGRAVITY_RELEASE_STORE_FILE"] as? String
+                    ?: env["ANTIGRAVITY_RELEASE_STORE_FILE"]
+                    ?: "release.keystore"
+            )
+            storePassword = (props["ANTIGRAVITY_RELEASE_STORE_PASSWORD"] as? String)
+                ?: env["ANTIGRAVITY_RELEASE_STORE_PASSWORD"]
+                ?: ""
+            keyAlias = (props["ANTIGRAVITY_RELEASE_KEY_ALIAS"] as? String)
+                ?: env["ANTIGRAVITY_RELEASE_KEY_ALIAS"]
+                ?: ""
+            keyPassword = (props["ANTIGRAVITY_RELEASE_KEY_PASSWORD"] as? String)
+                ?: env["ANTIGRAVITY_RELEASE_KEY_PASSWORD"]
+                ?: ""
         }
     }
 
