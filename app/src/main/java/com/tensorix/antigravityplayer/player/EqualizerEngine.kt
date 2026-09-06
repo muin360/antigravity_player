@@ -112,6 +112,21 @@ class EqualizerEngine(private val context: Context) {
     private val _hrtfRoomSize = MutableStateFlow<Float>(prefs.getFloat("hrtf_room_size", 0.5f))
     val hrtfRoomSize: StateFlow<Float> = _hrtfRoomSize.asStateFlow()
 
+    private val _dvcVolume = MutableStateFlow<Double>(1.0)
+    val dvcVolume: StateFlow<Double> = _dvcVolume.asStateFlow()
+
+    private val _userVolume = MutableStateFlow<Double>(1.0)
+    val userVolume: StateFlow<Double> = _userVolume.asStateFlow()
+
+    private val _replayGainMultiplier = MutableStateFlow<Double>(1.0)
+    val replayGainMultiplier: StateFlow<Double> = _replayGainMultiplier.asStateFlow()
+
+    private val _autoEqProfile = MutableStateFlow<com.tensorix.antigravityplayer.audio.AutoEqProfile?>(null)
+    val autoEqProfile: StateFlow<com.tensorix.antigravityplayer.audio.AutoEqProfile?> = _autoEqProfile.asStateFlow()
+
+    private val _isAutoEqEnabled = MutableStateFlow<Boolean>(false)
+    val isAutoEqEnabled: StateFlow<Boolean> = _isAutoEqEnabled.asStateFlow()
+
     private val _currentPresetName = MutableStateFlow(prefs.getString("current_preset", "Flat") ?: "Flat")
     val currentPresetName: StateFlow<String> = _currentPresetName.asStateFlow()
 
@@ -128,33 +143,40 @@ class EqualizerEngine(private val context: Context) {
 
     fun setListeningMode(mode: com.tensorix.antigravityplayer.audio.ListeningMode) {
         _listeningMode.value = mode
-        prefs.edit { putString("listening_mode", mode.name) }
-
         when (mode) {
             com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE -> {
-                setPreAmpGain(0.0f)
-                setClarityGain(0.0f)
-                setAirPresence(0.0f)
-                setWarmSaturation(0.0f)
-                setCrossfeedLevel(0.0f)
-                setStereoExpansion(1.0f)
+                _preAmpGainDb.value = 0.0f
+                _clarityGain.value = 0.0f
+                _airPresence.value = 0.0f
+                _warmSaturation.value = 0.0f
+                _crossfeedLevel.value = 0.0f
+                _stereoExpansion.value = 1.0f
             }
             com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE -> {
-                setPreAmpGain(3.5f)
-                setClarityGain(3.5f)
-                setAirPresence(2.0f)
-                setWarmSaturation(0.08f)
-                setCrossfeedLevel(0.35f)
-                setStereoExpansion(1.1f)
+                _preAmpGainDb.value = 3.5f
+                _clarityGain.value = 3.5f
+                _airPresence.value = 2.0f
+                _warmSaturation.value = 0.08f
+                _crossfeedLevel.value = 0.35f
+                _stereoExpansion.value = 1.1f
             }
             com.tensorix.antigravityplayer.audio.ListeningMode.DYNAMIC -> {
-                setPreAmpGain(4.0f)
-                setClarityGain(4.5f)
-                setAirPresence(3.0f)
-                setWarmSaturation(0.12f)
-                setCrossfeedLevel(0.20f)
-                setStereoExpansion(1.25f)
+                _preAmpGainDb.value = 4.0f
+                _clarityGain.value = 4.5f
+                _airPresence.value = 3.0f
+                _warmSaturation.value = 0.12f
+                _crossfeedLevel.value = 0.20f
+                _stereoExpansion.value = 1.25f
             }
+        }
+        prefs.edit {
+            putString("listening_mode", mode.name)
+            putFloat("pre_amp_db", _preAmpGainDb.value)
+            putFloat("clarity_gain", _clarityGain.value)
+            putFloat("air_presence", _airPresence.value)
+            putFloat("warm_saturation", _warmSaturation.value)
+            putFloat("crossfeed_level", _crossfeedLevel.value)
+            putFloat("stereo_expansion", _stereoExpansion.value)
         }
         syncWithDsp()
     }
@@ -174,16 +196,12 @@ class EqualizerEngine(private val context: Context) {
 
     fun setTriodeWarmth(level: Float) {
         _triodeWarmth.value = level
-        dspProcessor?.triodeWarmthLevel = level.toDouble()
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit { putFloat("triode_warmth", level) }
         syncWithDsp()
     }
 
     fun setPentodeTape(level: Float) {
         _pentodeTape.value = level
-        dspProcessor?.pentodeTapeLevel = level.toDouble()
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit { putFloat("pentode_tape", level) }
         syncWithDsp()
     }
@@ -215,9 +233,10 @@ class EqualizerEngine(private val context: Context) {
         }
 
         val autoEqEngine = PlaybackService.instance?.autoEqEngine
-        val isAutoEq = autoEqEngine?.isAutoEqEnabled?.value == true && !isBypass && isEnabled
+        val isAutoEq = (_isAutoEqEnabled.value || autoEqEngine?.isAutoEqEnabled?.value == true) && !isBypass && isEnabled
+        val activeProfile = _autoEqProfile.value ?: autoEqEngine?.activeProfile?.value
         val peqList = if (isAutoEq) {
-            autoEqEngine?.activeProfile?.value?.bands?.map { band ->
+            activeProfile?.bands?.map { band ->
                 AuthoritativePeqBand(
                     filterType = band.filterType,
                     frequencyHz = band.frequencyHz,
@@ -229,6 +248,9 @@ class EqualizerEngine(private val context: Context) {
         } else {
             emptyList()
         }
+
+        val effVolume = if (isBypass) 1.0 else (_dvcVolume.value * _userVolume.value).coerceIn(0.0, 1.0)
+        val rgMult = if (isBypass || !isRgEnabled) 1.0 else _replayGainMultiplier.value
 
         return AuthoritativeDspConfig(
             isEnabled = isEnabled,
@@ -254,8 +276,8 @@ class EqualizerEngine(private val context: Context) {
             ditherStrength = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0),
             outputBitDepth = dsp?.outputBitDepth ?: 24,
             replayGainEnabled = isRgEnabled,
-            replayGainMultiplier = if (isBypass || !isRgEnabled) 1.0 else (dsp?.replayGainMultiplier ?: 1.0),
-            dvcVolume = if (isBypass) 1.0 else (dsp?.dvcVolume ?: 1.0),
+            replayGainMultiplier = rgMult,
+            dvcVolume = effVolume,
             bandGainsDb = eqBands,
             peqBands = peqList,
             isAutoEqEnabled = isAutoEq
@@ -266,27 +288,27 @@ class EqualizerEngine(private val context: Context) {
         val handle = if (targetHandle != 0L) targetHandle else com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
         if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
             try {
-                com.tensorix.antigravityplayer.audio.OboeBridge.setDspParametersBatch(
+                val count = if (config.isAutoEqEnabled) config.peqBands.size else 0
+                val types = if (count > 0) IntArray(count) { config.peqBands[it].filterType } else IntArray(0)
+                val freqs = if (count > 0) DoubleArray(count) { config.peqBands[it].frequencyHz } else DoubleArray(0)
+                val qs = if (count > 0) DoubleArray(count) { config.peqBands[it].qFactor } else DoubleArray(0)
+                val gains = if (count > 0) DoubleArray(count) { config.peqBands[it].gainDb } else DoubleArray(0)
+                val enableds = if (count > 0) BooleanArray(count) { config.peqBands[it].isEnabled } else BooleanArray(0)
+
+                com.tensorix.antigravityplayer.audio.OboeBridge.setDspUnifiedConfig(
                     handle = handle,
                     enabled = !config.isBitPerfectBypass && config.isEnabled,
                     bitPerfectBypass = config.isBitPerfectBypass,
                     activeFlags = config.computeActiveFlags(),
                     params = config.toNativeDoubleParams(),
                     outputBitDepth = config.outputBitDepth,
-                    invertPhase = config.invertPhase
+                    invertPhase = config.invertPhase,
+                    peqTypes = types,
+                    peqFrequencies = freqs,
+                    peqQs = qs,
+                    peqGainsDb = gains,
+                    peqEnableds = enableds
                 )
-
-                // Atomic single-call PEQ batch publication
-                if (config.isAutoEqEnabled && config.peqBands.isNotEmpty()) {
-                    val count = config.peqBands.size
-                    val types = IntArray(count) { config.peqBands[it].filterType }
-                    val freqs = DoubleArray(count) { config.peqBands[it].frequencyHz }
-                    val qs = DoubleArray(count) { config.peqBands[it].qFactor }
-                    val gains = DoubleArray(count) { config.peqBands[it].gainDb }
-                    com.tensorix.antigravityplayer.audio.OboeBridge.setPeqBands(handle, types, freqs, qs, gains)
-                } else {
-                    com.tensorix.antigravityplayer.audio.OboeBridge.clearPeqBands(handle)
-                }
             } catch (e: Exception) {
                 Log.w("EqualizerEngine", "Native DSP sync notice", e)
             }
@@ -348,11 +370,6 @@ class EqualizerEngine(private val context: Context) {
     }
 
     fun setBandLevel(band: Short, level: Short) {
-        // No drop-on-throttle: every update lands. The heavy work below is
-        // cheap post-hardening (atomic param stores + queued coefficient
-        // rebuilds), so slider-rate storms are harmless.
-        dspProcessor?.setBandGain(band.toInt(), level.toDouble() / 100.0)
-
         val currentLevels = _bandLevels.value.toMutableList()
         if (band.toInt() in currentLevels.indices) {
             currentLevels[band.toInt()] = level
@@ -372,18 +389,8 @@ class EqualizerEngine(private val context: Context) {
     fun setBassBoost(strength: Short) {
         val safeStrength = strength.coerceIn(0, 1000)
         _bassBoostStrength.value = safeStrength
-        dspProcessor?.bassBoostGainDb = (safeStrength.toDouble() / 1000.0) * 15.0
-        syncWithDsp()
-        try {
-            bassBoost?.let {
-                if (runCatching { it.strengthSupported }.getOrDefault(false)) {
-                    it.setStrength(safeStrength)
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
-        }
         prefs.edit().putInt("bass_boost", safeStrength.toInt()).apply()
+        syncWithDsp()
     }
 
     /** INERT: framework Virtualizer never attaches while the DSP owns the chain.
@@ -396,87 +403,68 @@ class EqualizerEngine(private val context: Context) {
 
     fun setPreAmpGain(gainDb: Float) {
         _preAmpGainDb.value = gainDb
-        dspProcessor?.preAmpGainDb = gainDb.toDouble()
         prefs.edit().putFloat("pre_amp_db", gainDb).apply()
         syncWithDsp()
     }
 
     fun setClarityGain(gainDb: Float) {
         _clarityGain.value = gainDb
-        dspProcessor?.clarityEnhancerGain = gainDb.toDouble()
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit().putFloat("clarity_gain", gainDb).apply()
         syncWithDsp()
     }
 
     fun setWarmSaturation(level: Float) {
         _warmSaturation.value = level
-        dspProcessor?.warmSaturationLevel = level.toDouble()
         prefs.edit().putFloat("warm_saturation", level).apply()
         syncWithDsp()
     }
 
     fun setAirPresence(gainDb: Float) {
         _airPresence.value = gainDb
-        dspProcessor?.setAirPresenceGain(gainDb.toDouble())
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit().putFloat("air_presence", gainDb).apply()
         syncWithDsp()
     }
 
     fun setCrossfeedLevel(level: Float) {
         _crossfeedLevel.value = level
-        dspProcessor?.crossfeedLevel = level.toDouble()
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit().putFloat("crossfeed_level", level).apply()
         syncWithDsp()
     }
 
     fun setStereoExpansion(multiplier: Float) {
         _stereoExpansion.value = multiplier
-        dspProcessor?.stereoExpansionMultiplier = multiplier.toDouble()
         prefs.edit().putFloat("stereo_expansion", multiplier).apply()
         syncWithDsp()
     }
 
     fun setLimiterThreshold(db: Float) {
         _limiterThreshold.value = db
-        dspProcessor?.limiterThresholdDb = db.toDouble()
         prefs.edit().putFloat("limiter_threshold", db).apply()
         syncWithDsp()
     }
 
     fun setChannelBalance(balance: Float) {
         _channelBalance.value = balance
-        dspProcessor?.channelBalance = balance.toDouble()
         prefs.edit().putFloat("channel_balance", balance).apply()
         syncWithDsp()
     }
 
     fun setInvertPhase(invert: Boolean) {
         _invertPhase.value = invert
-        dspProcessor?.invertPhase = invert
         prefs.edit().putBoolean("invert_phase", invert).apply()
         syncWithDsp()
     }
 
     fun setTurboSharpness(enabled: Boolean) {
         _isTurboSharpness.value = enabled
-        val dsp = dspProcessor
-        if (dsp != null) {
-            dsp.isTurboMode = enabled
-            dsp.harmonicExciterLevel = if (enabled) 0.25 else 0.0
-            dsp.limiterEnabled = enabled
-        }
         prefs.edit().putBoolean("turbo_sharpness", enabled).apply()
         syncWithDsp()
     }
 
     fun setTrebleStrength(strength: Short) {
         _trebleStrength.value = strength
-        dspProcessor?.trebleGainDb = (strength.toDouble() / 1500.0) * 15.0
-        syncWithDsp()
         prefs.edit().putInt("treble_strength", strength.toInt()).apply()
+        syncWithDsp()
     }
 
     /** INERT: PresetReverb was never instantiated. No-op for API compat. */
@@ -490,26 +478,21 @@ class EqualizerEngine(private val context: Context) {
         preset.bandLevels.forEachIndexed { index, level ->
             if (index < newLevels.size) {
                 newLevels[index] = level.toShort()
-                dspProcessor?.setBandGain(index, level.toDouble() / 100.0)
                 prefs.edit().putInt("band_$index", level.toInt()).apply()
             }
         }
-        dspProcessor?.updateAllFiltersLive()
         _bandLevels.value = newLevels
         syncWithDsp()
     }
 
     fun setReplayGainEnabled(enabled: Boolean) {
         _replayGainEnabled.value = enabled
-        dspProcessor?.replayGainEnabled = enabled
         prefs.edit().putBoolean("replay_gain_enabled", enabled).apply()
         syncWithDsp()
     }
 
     fun setSubBassMono(enabled: Boolean) {
         _subBassMono.value = enabled
-        dspProcessor?.subBassMonoEnabled = enabled
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit().putBoolean("sub_bass_mono", enabled).apply()
         syncWithDsp()
     }
@@ -529,19 +512,11 @@ class EqualizerEngine(private val context: Context) {
 
     fun setEnabled(enabled: Boolean) {
         _isEnabled.value = enabled
-        dspProcessor?.isEnabled = enabled
-
         if (enabled && dspProcessor != null) {
-            // JVM/native DSP owns the EQ: framework effects stay detached.
             release()
         } else if (!enabled) {
-            // Disabling the equalizer must NOT silently fall through to the
-            // framework Equalizer with the same bands applied (previous bug):
-            // off means off.
             release()
         }
-
-        dspProcessor?.updateAllFiltersLive()
         prefs.edit().putBoolean("eq_enabled", enabled).apply()
         syncWithDsp()
     }
@@ -549,10 +524,6 @@ class EqualizerEngine(private val context: Context) {
     fun applyHiFiProfile(profile: com.tensorix.antigravityplayer.audio.HiFiProfile) {
         _currentPresetName.value = profile.name
 
-        // Phase 13 contamination fix: this used to perform 10 separate
-        // prefs.apply() disk writes + framework-effect writes on EVERY route
-        // evaluation. Now: compute once, skip when identical, persist via a
-        // SINGLE editor transaction.
         val newLevels = _bandLevels.value.toMutableList()
         var levelsChanged = false
         profile.eqGainsDb.forEachIndexed { index, gain ->
@@ -560,7 +531,6 @@ class EqualizerEngine(private val context: Context) {
                 val level = (gain * 100).toInt().toShort()
                 if (newLevels[index] != level) levelsChanged = true
                 newLevels[index] = level
-                dspProcessor?.setBandGain(index, gain)
             }
         }
 
@@ -581,12 +551,65 @@ class EqualizerEngine(private val context: Context) {
             }
             putInt("bass_boost", targetBass)
             putInt("treble_strength", targetTreble)
+            putFloat("crossfeed_level", targetCrossfeed)
+            putBoolean("replay_gain_enabled", profile.replayGainEnabled)
         }.apply()
 
         _bandLevels.value = newLevels
-        setCrossfeedLevel(targetCrossfeed)
-        setReplayGainEnabled(profile.replayGainEnabled)
-        dspProcessor?.updateAllFiltersLive()
+        _bassBoostStrength.value = targetBass.toShort()
+        _trebleStrength.value = targetTreble.toShort()
+        _crossfeedLevel.value = targetCrossfeed
+        _replayGainEnabled.value = profile.replayGainEnabled
+        syncWithDsp()
+    }
+
+    fun setDvcVolume(volume: Double) {
+        val safeVol = volume.coerceIn(0.0, 1.0)
+        _dvcVolume.value = safeVol
+        dspProcessor?.dvcVolume = safeVol
+        syncWithDsp()
+    }
+
+    fun setUserVolume(volume: Double) {
+        val safeVol = volume.coerceIn(0.0, 1.0)
+        _userVolume.value = safeVol
+        syncWithDsp()
+    }
+
+    fun setReplayGainMultiplier(multiplier: Double) {
+        val safeMult = multiplier.coerceIn(0.0, 10.0)
+        _replayGainMultiplier.value = safeMult
+        dspProcessor?.replayGainMultiplier = safeMult
+        syncWithDsp()
+    }
+
+    fun applyAutoEqProfile(profile: com.tensorix.antigravityplayer.audio.AutoEqProfile) {
+        _autoEqProfile.value = profile
+        _isAutoEqEnabled.value = true
+        _preAmpGainDb.value = profile.preampDb.toFloat().coerceIn(-12.0f, 0.0f)
+        prefs.edit {
+            putFloat("pre_amp_db", _preAmpGainDb.value)
+        }
+        syncWithDsp()
+    }
+
+    fun disableAutoEq() {
+        _isAutoEqEnabled.value = false
+        _preAmpGainDb.value = 0.0f
+        prefs.edit {
+            putFloat("pre_amp_db", 0.0f)
+        }
+        syncWithDsp()
+    }
+
+    fun clearAutoEq() {
+        _autoEqProfile.value = null
+        _isAutoEqEnabled.value = false
+        _preAmpGainDb.value = 0.0f
+        prefs.edit {
+            putFloat("pre_amp_db", 0.0f)
+        }
+        syncWithDsp()
     }
 
     fun release() {

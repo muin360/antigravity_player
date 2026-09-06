@@ -47,12 +47,12 @@ data class HardwareVerificationReport(
     val isDirectOutputActive: Boolean = false,
     val isVendorHiFiActive: Boolean = false,
     val hardwareDacState: HardwareDacState = HardwareDacState.UNKNOWN_HAL_RESTRICTED,
-    val audioThreadType: AudioFlingerThreadType = AudioFlingerThreadType.MIXER_THREAD,
-    val actualOutputSampleRate: Int = 48000,
-    val actualOutputFramesPerBuffer: Int = 192,
-    val actualAudioSinkType: String = "Standard AudioTrack (AudioFlinger)",
-    val activeDacName: String = "Standard Android Audio HAL",
-    val dacVendor: String = "Google / AOSP Audio",
+    val audioThreadType: AudioFlingerThreadType = AudioFlingerThreadType.UNKNOWN,
+    val actualOutputSampleRate: Int = 0,
+    val actualOutputFramesPerBuffer: Int = 0,
+    val actualAudioSinkType: String = "Unknown AudioSink",
+    val activeDacName: String = "Unknown Audio HAL",
+    val dacVendor: String = "Unknown Vendor",
     val isBitPerfectEligible: Boolean = false,
     val isBitPerfectVerified: Boolean = false,
     val isWiredHeadsetConnected: Boolean = false,
@@ -181,22 +181,23 @@ object HardwareHiFiVerifier {
         val (isVendorHiFi, dacState, dacName, dacVendor) = probeVendorDac(context, isWiredHeadset, details)
 
         // 4. AudioFlinger Thread Type Detection
+        // STRICT DISTINCTION: capability != active runtime state!
         val threadType = when {
-            isVendorHiFi && isDirectSupported -> AudioFlingerThreadType.OFFLOAD_THREAD
-            isDirectActive || isDirectSupported -> AudioFlingerThreadType.DIRECT_THREAD
+            isVendorHiFi && isDirectActive -> AudioFlingerThreadType.OFFLOAD_THREAD
+            isDirectActive -> AudioFlingerThreadType.DIRECT_THREAD
             else -> AudioFlingerThreadType.MIXER_THREAD
         }
 
         // 5. AudioSink Type Determination
         val audioSinkType = when (threadType) {
             AudioFlingerThreadType.OFFLOAD_THREAD -> "Direct Hardware Offload (Native DAC Bus)"
-            AudioFlingerThreadType.DIRECT_THREAD -> if (isDirectActive) "Direct PCM (Active Verified)" else "Direct PCM (Supported)"
-            AudioFlingerThreadType.MIXER_THREAD -> "32-bit Float AudioSink (AudioFlinger Mixer)"
-            AudioFlingerThreadType.UNKNOWN -> "Standard AudioTrack"
+            AudioFlingerThreadType.DIRECT_THREAD -> "Direct PCM (Active Verified)"
+            AudioFlingerThreadType.MIXER_THREAD -> if (isDirectSupported) "32-bit Float AudioSink (Direct Capable, Mixer Active)" else "32-bit Float AudioSink (AudioFlinger Mixer)"
+            AudioFlingerThreadType.UNKNOWN -> "Unknown AudioSink"
         }
 
         // 6. HAL-Level Direct Stream Eligibility Indicator
-        val isSampleRateMatched = (trackSampleRate > 0 && trackSampleRate == systemSampleRate) || (isDirectSupported && trackSampleRate > 0)
+        val isSampleRateMatched = (trackSampleRate > 0 && trackSampleRate == systemSampleRate) || (isDirectActive && trackSampleRate > 0)
         val isBitDepthPreserved = trackBitDepth in 1..32
         val isEligible = isDspBypassed && isDirectSupported && isSampleRateMatched && isBitDepthPreserved
         
@@ -216,13 +217,15 @@ object HardwareHiFiVerifier {
             limitations.add("System resamples track ($trackSampleRate Hz -> $systemSampleRate Hz)")
         }
 
+        val outputSampleRate = if (isDirectActive && trackSampleRate > 0) trackSampleRate else systemSampleRate
+
         val report = HardwareVerificationReport(
             isDirectOutputSupported = isDirectSupported,
             isDirectOutputActive = isDirectActive,
             isVendorHiFiActive = isVendorHiFi,
             hardwareDacState = dacState,
             audioThreadType = threadType,
-            actualOutputSampleRate = if ((isDirectActive || isDirectSupported) && trackSampleRate > 0) trackSampleRate else systemSampleRate,
+            actualOutputSampleRate = outputSampleRate,
             actualOutputFramesPerBuffer = framesPerBuffer,
             actualAudioSinkType = audioSinkType,
             activeDacName = dacName,

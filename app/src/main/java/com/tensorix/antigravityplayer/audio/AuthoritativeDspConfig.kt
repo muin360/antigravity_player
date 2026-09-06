@@ -15,10 +15,13 @@ data class AuthoritativePeqBand(
     val isEnabled: Boolean = true
 ) {
     fun validated(): AuthoritativePeqBand {
+        val safeFreq = if (frequencyHz.isFinite()) frequencyHz.coerceIn(10.0, 24000.0) else 1000.0
+        val safeQ = if (qFactor.isFinite()) qFactor.coerceIn(0.05, 100.0) else 1.414
+        val safeGain = if (gainDb.isFinite()) gainDb.coerceIn(-36.0, 36.0) else 0.0
         return copy(
-            frequencyHz = frequencyHz.coerceIn(10.0, 48000.0),
-            qFactor = qFactor.coerceIn(0.1, 30.0),
-            gainDb = gainDb.coerceIn(-24.0, 24.0)
+            frequencyHz = safeFreq,
+            qFactor = safeQ,
+            gainDb = safeGain
         )
     }
 }
@@ -72,36 +75,54 @@ data class AuthoritativeDspConfig(
      * Produces a fully validated, range-clamped instance.
      */
     fun validated(): AuthoritativeDspConfig {
-        val validatedBands = bandGainsDb.map { it.coerceIn(-15.0, 15.0) }
+        fun sanitize(v: Double, min: Double, max: Double, default: Double): Double {
+            return if (v.isFinite()) v.coerceIn(min, max) else default
+        }
+
+        val validatedBands = bandGainsDb.map { sanitize(it, -15.0, 15.0, 0.0) }
         val validatedPeq = peqBands.take(32).map { it.validated() }
-        val effectiveRgMultiplier = if (replayGainEnabled && !isBitPerfectBypass) {
-            replayGainMultiplier.coerceIn(0.01, 10.0)
+
+        val effectivePreAmp = if (isBitPerfectBypass) 0.0 else sanitize(preAmpGainDb, -20.0, 20.0, 0.0)
+        val effectiveDvc = if (isBitPerfectBypass) 1.0 else sanitize(dvcVolume, 0.0, 1.0, 1.0)
+        val effectiveRgMultiplier = if (!isBitPerfectBypass && replayGainEnabled) {
+            sanitize(replayGainMultiplier, 0.01, 10.0, 1.0)
         } else {
             1.0
         }
+        val effectiveCrossfeed = if (isBitPerfectBypass) 0.0 else sanitize(crossfeedLevel, 0.0, 1.0, 0.0)
+        val effectiveStereoExp = if (isBitPerfectBypass) 1.0 else sanitize(stereoExpansionMultiplier, 0.0, 2.0, 1.0)
+        val effectiveBalance = if (isBitPerfectBypass) 0.0 else sanitize(channelBalance, -1.0, 1.0, 0.0)
+        val effectiveBass = if (isBitPerfectBypass) 0.0 else sanitize(bassBoostGainDb, 0.0, 15.0, 0.0)
+        val effectiveTreble = if (isBitPerfectBypass) 0.0 else sanitize(trebleGainDb, 0.0, 15.0, 0.0)
+        val effectiveClarity = if (isBitPerfectBypass) 0.0 else sanitize(clarityEnhancerGainDb, 0.0, 15.0, 0.0)
+        val effectiveExciter = if (isBitPerfectBypass) 0.0 else sanitize(harmonicExciterLevel, 0.0, 1.0, 0.0)
+        val effectiveWarmth = if (isBitPerfectBypass) 0.0 else sanitize(warmSaturationLevel, 0.0, 1.0, 0.0)
+        val effectiveTriode = if (isBitPerfectBypass) 0.0 else sanitize(triodeWarmthLevel, 0.0, 1.0, 0.0)
+        val effectivePentode = if (isBitPerfectBypass) 0.0 else sanitize(pentodeTapeLevel, 0.0, 1.0, 0.0)
+        val effectiveAir = if (isBitPerfectBypass) 0.0 else sanitize(airPresenceGainDb, 0.0, 15.0, 0.0)
 
         return copy(
-            preAmpGainDb = preAmpGainDb.coerceIn(-20.0, 20.0),
-            bassBoostGainDb = bassBoostGainDb.coerceIn(0.0, 15.0),
-            trebleGainDb = trebleGainDb.coerceIn(0.0, 15.0),
-            clarityEnhancerGainDb = clarityEnhancerGainDb.coerceIn(0.0, 15.0),
-            harmonicExciterLevel = harmonicExciterLevel.coerceIn(0.0, 1.0),
-            warmSaturationLevel = warmSaturationLevel.coerceIn(0.0, 1.0),
-            triodeWarmthLevel = triodeWarmthLevel.coerceIn(0.0, 1.0),
-            pentodeTapeLevel = pentodeTapeLevel.coerceIn(0.0, 1.0),
-            crossfeedLevel = crossfeedLevel.coerceIn(0.0, 1.0),
-            stereoExpansionMultiplier = stereoExpansionMultiplier.coerceIn(0.0, 2.0),
-            channelBalance = channelBalance.coerceIn(-1.0, 1.0),
-            airPresenceGainDb = airPresenceGainDb.coerceIn(0.0, 15.0),
-            hrtfRoomSize = hrtfRoomSize.coerceIn(0.0, 1.0),
-            limiterThresholdDb = limiterThresholdDb.coerceIn(-20.0, 0.0),
-            ditherStrength = ditherStrength.coerceIn(0.0, 1.0),
+            preAmpGainDb = effectivePreAmp,
+            bassBoostGainDb = effectiveBass,
+            trebleGainDb = effectiveTreble,
+            clarityEnhancerGainDb = effectiveClarity,
+            harmonicExciterLevel = effectiveExciter,
+            warmSaturationLevel = effectiveWarmth,
+            triodeWarmthLevel = effectiveTriode,
+            pentodeTapeLevel = effectivePentode,
+            crossfeedLevel = effectiveCrossfeed,
+            stereoExpansionMultiplier = effectiveStereoExp,
+            channelBalance = effectiveBalance,
+            airPresenceGainDb = effectiveAir,
+            hrtfRoomSize = sanitize(hrtfRoomSize, 0.0, 1.0, 0.5),
+            limiterThresholdDb = sanitize(limiterThresholdDb, -20.0, 0.0, 0.0),
+            ditherStrength = sanitize(ditherStrength, 0.0, 1.0, 0.0),
             outputBitDepth = when (outputBitDepth) {
                 16, 24, 32 -> outputBitDepth
                 else -> 24
             },
             replayGainMultiplier = effectiveRgMultiplier,
-            dvcVolume = dvcVolume.coerceIn(0.0, 1.0),
+            dvcVolume = effectiveDvc,
             bandGainsDb = Collections.unmodifiableList(validatedBands),
             peqBands = Collections.unmodifiableList(validatedPeq)
         )

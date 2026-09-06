@@ -361,35 +361,42 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
     fun applyConfiguration(config: FallbackDspConfiguration) {
         synchronized(snapshotLock) {
-            this.isEnabled = config.isEnabled
-            this.isBitPerfectBypass = config.isBitPerfectBypass
-            this.isTurboMode = config.isTurboMode
-            this.preAmpGainDb = config.preAmpGainDb
-            this.bassBoostGainDb = config.bassBoostGainDb
-            this.trebleGainDb = config.trebleGainDb
-            this.harmonicExciterLevel = config.harmonicExciterLevel
-            this.clarityEnhancerGain = config.clarityEnhancerGain
-            this.stereoExpansionMultiplier = config.stereoExpansionMultiplier
-            this.dvcVolume = config.dvcVolume
-            this.replayGainEnabled = config.replayGainEnabled
-            this.replayGainMultiplier = config.replayGainMultiplier
-            this.ditherStrength = config.ditherStrength
-            this.outputBitDepth = config.outputBitDepth
-            this.warmSaturationLevel = config.warmSaturationLevel
-            this.triodeWarmthLevel = config.triodeWarmthLevel
-            this.pentodeTapeLevel = config.pentodeTapeLevel
-            this.crossfeedLevel = config.crossfeedLevel
-            this.limiterEnabled = config.limiterEnabled
-            this.limiterThresholdDb = config.limiterThresholdDb
-            this.subBassMonoEnabled = config.subBassMonoEnabled
-            this.channelBalance = config.channelBalance
-            this.invertPhase = config.invertPhase
-            this.airPresenceGainDb = config.airPresenceGainDb
-            val limit = minOf(10, config.bandGainsDb.size)
-            for (i in 0 until limit) {
-                bandGainsDb[i] = config.bandGainsDb[i]
+            batchDepth++
+            try {
+                this.isEnabled = config.isEnabled
+                this.isBitPerfectBypass = config.isBitPerfectBypass
+                this.isTurboMode = config.isTurboMode
+                this.preAmpGainDb = config.preAmpGainDb
+                this.bassBoostGainDb = config.bassBoostGainDb
+                this.trebleGainDb = config.trebleGainDb
+                this.harmonicExciterLevel = config.harmonicExciterLevel
+                this.clarityEnhancerGain = config.clarityEnhancerGain
+                this.stereoExpansionMultiplier = config.stereoExpansionMultiplier
+                this.dvcVolume = config.dvcVolume
+                this.replayGainEnabled = config.replayGainEnabled
+                this.replayGainMultiplier = config.replayGainMultiplier
+                this.ditherStrength = config.ditherStrength
+                this.outputBitDepth = config.outputBitDepth
+                this.warmSaturationLevel = config.warmSaturationLevel
+                this.triodeWarmthLevel = config.triodeWarmthLevel
+                this.pentodeTapeLevel = config.pentodeTapeLevel
+                this.crossfeedLevel = config.crossfeedLevel
+                this.limiterEnabled = config.limiterEnabled
+                this.limiterThresholdDb = config.limiterThresholdDb
+                this.subBassMonoEnabled = config.subBassMonoEnabled
+                this.channelBalance = config.channelBalance
+                this.invertPhase = config.invertPhase
+                this.airPresenceGainDb = config.airPresenceGainDb
+                val limit = minOf(10, config.bandGainsDb.size)
+                for (i in 0 until limit) {
+                    bandGainsDb[i] = config.bandGainsDb[i]
+                }
+            } finally {
+                batchDepth--
+                if (batchDepth == 0) {
+                    rebuildSnapshotLocked()
+                }
             }
-            rebuildSnapshotLocked()
         }
     }
 

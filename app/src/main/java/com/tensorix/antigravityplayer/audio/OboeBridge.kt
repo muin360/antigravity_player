@@ -86,6 +86,22 @@ object OboeBridge {
         invertPhase: Boolean
     )
 
+    // Unified Atomic DSP Publication (Base parameters + PEQ bands in ONE transaction)
+    external fun setDspUnifiedConfig(
+        handle: Long,
+        enabled: Boolean,
+        bitPerfectBypass: Boolean,
+        activeFlags: BooleanArray,
+        params: DoubleArray,
+        outputBitDepth: Int,
+        invertPhase: Boolean,
+        peqTypes: IntArray,
+        peqFrequencies: DoubleArray,
+        peqQs: DoubleArray,
+        peqGainsDb: DoubleArray,
+        peqEnableds: BooleanArray
+    )
+
     // Parametric EQ (PEQ)
     external fun clearPeqBands(handle: Long)
     external fun addPeqBand(handle: Long, type: Int, frequency: Double, q: Double, gainDb: Double)

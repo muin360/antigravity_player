@@ -82,6 +82,7 @@ double AudiophileResampler::blackmanNutall(double x) {
 
 void AudiophileResampler::configure(int32_t inSampleRate, int32_t outSampleRate,
                                     int32_t channelCount, ResampleQuality quality) {
+    std::lock_guard<std::mutex> lock(configMutex_);
     pendingInRate_.store(inSampleRate, std::memory_order_relaxed);
     pendingOutRate_.store(outSampleRate, std::memory_order_relaxed);
     static std::atomic<uint64_t> gGenerationSequence{1};

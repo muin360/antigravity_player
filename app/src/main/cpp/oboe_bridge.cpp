@@ -413,10 +413,17 @@ public:
 
     void pause() {
         std::lock_guard<std::mutex> lock(lifecycleMutex);
-        if (stream && isActive.load(std::memory_order_acquire) &&
-            stream->getState() == oboe::StreamState::Started) {
-            stream->requestPause();
-            transitionState(NativeLifecycleState::PAUSED);
+        if (stream && isActive.load(std::memory_order_acquire)) {
+            const auto s = stream->getState();
+            if (s == oboe::StreamState::Started || s == oboe::StreamState::Starting) {
+                transitionState(NativeLifecycleState::PAUSED);
+                stream->requestPause();
+                oboe::StreamState nextState = oboe::StreamState::Unknown;
+                stream->waitForStateChange(oboe::StreamState::Pausing, &nextState, 30 * 1000000LL);
+                if (stream->getState() == oboe::StreamState::Paused) {
+                    transitionState(NativeLifecycleState::PAUSED);
+                }
+            }
         }
     }
 
@@ -800,19 +807,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     wrapper->resampler.configure(sampleRate, actualStreamRate,
                                  actualChannels, antigravity::ResampleQuality::SINC_FAST);
 
-    // Rule 4: Step 6 - Start stream only after render-path is 100% prepared
-    wrapper->transitionState(NativeLifecycleState::STARTING);
-    result = wrapper->stream->requestStart();
-    if (result != oboe::Result::OK) {
-        LOGE("Failed to start Oboe stream: %s", oboe::convertToText(result));
-        wrapper->transitionState(NativeLifecycleState::FAILED);
-        wrapper->closeInternal();
-        return 0;
-    }
-    wrapper->transitionState(NativeLifecycleState::STARTED);
+    // Rule 4: Step 6 - Keep stream in OPEN state until explicitly started by AudioSink.play()
     wrapper->rawStream_.store(wrapper->stream.get(), std::memory_order_release);
+    wrapper->transitionState(NativeLifecycleState::OPEN);
 
-    LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d ch=%d",
+    LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d ch=%d (state=OPEN)",
          oboe::convertToText(wrapper->stream->getAudioApi()),
          (wrapper->stream->getSharingMode() == oboe::SharingMode::Exclusive)
              ? "EXCLUSIVE" : "SHARED",
@@ -860,20 +859,21 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         return kErrStaleOrWrite;
     }
 
-    // Rule 5: Enforce single-writer model per stream
-    bool expectedWriter = false;
-    if (!wrapper->isWriting_.compare_exchange_strong(expectedWriter, true, std::memory_order_acq_rel)) {
-        return 0; // concurrent write detected; caller will retry
+    // Rule 5: Enforce single-writer model per stream with atomic admission
+    int32_t expectedWriters = 0;
+    if (!wrapper->activeWriters_.compare_exchange_strong(expectedWriters, 1, std::memory_order_acq_rel)) {
+        return 0; // concurrent write detected; single-writer model
     }
     struct WriterGuard {
-        std::atomic<bool> &flag;
         std::atomic<int32_t> &writers;
         ~WriterGuard() {
-            flag.store(false, std::memory_order_release);
-            writers.fetch_sub(1, std::memory_order_release);
+            writers.store(0, std::memory_order_release);
         }
-    } writerGuard{wrapper->isWriting_, wrapper->activeWriters_};
-    wrapper->activeWriters_.fetch_add(1, std::memory_order_acquire);
+    } writerGuard{wrapper->activeWriters_};
+
+    if (!wrapper->isActive.load(std::memory_order_acquire)) {
+        return kErrStaleOrWrite;
+    }
 
     // Bounds validation against the real direct-buffer capacity.
     const jlong capacity = env->GetDirectBufferCapacity(directBuffer);
@@ -1429,6 +1429,109 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspParametersBatch(
     }
 
     w->dsp.setDspParametersBatch(p);
+}
+
+JNIEXPORT void JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
+    JNIEnv *env, jobject thiz, jlong handle,
+    jboolean enabled, jboolean bitPerfectBypass,
+    jbooleanArray activeFlags, jdoubleArray doubleParams,
+    jint outputBitDepth, jboolean invertPhase,
+    jintArray peqTypes, jdoubleArray peqFreqs, jdoubleArray peqQs, jdoubleArray peqGains,
+    jbooleanArray peqEnableds) {
+    auto w = getStream(handle);
+    if (!w) return;
+
+    antigravity::DspParams p;
+    p.enabled = (enabled == JNI_TRUE);
+    p.bitPerfectBypass = (bitPerfectBypass == JNI_TRUE);
+    p.outputBitDepth = outputBitDepth;
+    p.invertPhase = (invertPhase == JNI_TRUE);
+
+    if (activeFlags && env->GetArrayLength(activeFlags) >= 17) {
+        jboolean flags[17];
+        env->GetBooleanArrayRegion(activeFlags, 0, 17, flags);
+        p.eqActive = (flags[0] == JNI_TRUE);
+        p.autoEqActive = (flags[1] == JNI_TRUE);
+        p.peqActive = (flags[2] == JNI_TRUE);
+        p.limiterActive = (flags[3] == JNI_TRUE);
+        p.ditherActive = (flags[4] == JNI_TRUE);
+        p.replayGainActive = (flags[5] == JNI_TRUE);
+        p.crossfeedActive = (flags[6] == JNI_TRUE);
+        p.balanceActive = (flags[7] == JNI_TRUE);
+        p.spatialActive = (flags[8] == JNI_TRUE);
+        p.bassBoostActive = (flags[9] == JNI_TRUE);
+        p.trebleActive = (flags[10] == JNI_TRUE);
+        p.clarityActive = (flags[11] == JNI_TRUE);
+        p.harmonicExciterActive = (flags[12] == JNI_TRUE);
+        p.saturationActive = (flags[13] == JNI_TRUE);
+        p.stereoExpansionActive = (flags[14] == JNI_TRUE);
+        p.subBassMonoActive = (flags[15] == JNI_TRUE);
+        p.channelTransformActive = (flags[16] == JNI_TRUE);
+    }
+
+    if (doubleParams && env->GetArrayLength(doubleParams) >= 27) {
+        jdouble vals[27];
+        env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
+        p.preAmpGainDb = vals[0];
+        p.bassBoostGainDb = vals[1];
+        p.trebleGainDb = vals[2];
+        p.harmonicExciterLevel = vals[3];
+        p.clarityEnhancerGainDb = vals[4];
+        p.stereoExpansionMultiplier = vals[5];
+        p.dvcVolume = vals[6];
+        p.replayGainMultiplier = vals[7];
+        p.ditherStrength = vals[8];
+        p.warmSaturationLevel = vals[9];
+        p.triodeWarmthLevel = vals[10];
+        p.pentodeTapeLevel = vals[11];
+        p.crossfeedLevel = vals[12];
+        p.limiterThresholdDb = vals[13];
+        p.channelBalance = vals[14];
+        p.airPresenceGainDb = vals[15];
+        p.hrtfRoomSize = vals[16];
+        for (int i = 0; i < 10; ++i) {
+            p.bandGainsDb[i] = vals[17 + i];
+        }
+    }
+
+    std::vector<antigravity::PeqBandParams> bands;
+    if (peqTypes && peqFreqs && peqQs && peqGains) {
+        const jsize count = env->GetArrayLength(peqTypes);
+        if (count > 0 &&
+            env->GetArrayLength(peqFreqs) == count &&
+            env->GetArrayLength(peqQs) == count &&
+            env->GetArrayLength(peqGains) == count) {
+            const size_t limit = std::min(static_cast<size_t>(count), static_cast<size_t>(32));
+            bands.reserve(limit);
+
+            jint *t = env->GetIntArrayElements(peqTypes, nullptr);
+            jdouble *f = env->GetDoubleArrayElements(peqFreqs, nullptr);
+            jdouble *q = env->GetDoubleArrayElements(peqQs, nullptr);
+            jdouble *g = env->GetDoubleArrayElements(peqGains, nullptr);
+            jboolean *e = peqEnableds ? env->GetBooleanArrayElements(peqEnableds, nullptr) : nullptr;
+
+            if (t && f && q && g) {
+                for (size_t i = 0; i < limit; ++i) {
+                    antigravity::PeqBandParams band;
+                    band.type = static_cast<antigravity::FilterType>(t[i]);
+                    band.frequency = f[i];
+                    band.q = q[i];
+                    band.gainDb = g[i];
+                    band.enabled = e ? (e[i] == JNI_TRUE) : true;
+                    bands.push_back(band);
+                }
+            }
+
+            if (t) env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
+            if (f) env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
+            if (q) env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
+            if (g) env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
+            if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
+        }
+    }
+
+    w->dsp.setDspUnifiedConfig(p, bands);
 }
 
 // ---------------- Telemetry ----------------

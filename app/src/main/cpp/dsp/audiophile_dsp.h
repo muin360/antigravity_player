@@ -145,6 +145,9 @@ public:
     void setHrtfSpatialEnabled(bool enabled);
     void setHrtfRoomSize(double roomSize);
 
+    // Unified Atomic DSP Publication (Base parameters + PEQ bands in ONE transaction)
+    void setDspUnifiedConfig(const DspParams &newParams, const std::vector<PeqBandParams> &bands);
+
     // Batch parameter mutator
     void setDspParametersBatch(const DspParams &newParams);
     DspParams getDspParams();

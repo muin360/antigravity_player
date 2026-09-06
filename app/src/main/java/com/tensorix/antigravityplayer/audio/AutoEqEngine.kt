@@ -38,7 +38,8 @@ class AutoEqEngine(private val context: Context) {
     }
 
     /**
-     * Applies an AutoEQ profile directly to native C++ 64-bit PEQ filters and EqualizerEngine.
+     * Applies an AutoEQ profile atomically to the 64-bit DSP Engine through EqualizerEngine.
+     * All PEQ bands and pre-amp attenuation are published as a single transaction.
      */
     fun applyProfile(profile: AutoEqProfile, equalizerEngine: EqualizerEngine?) {
         _activeProfile.value = profile
@@ -50,49 +51,17 @@ class AutoEqEngine(private val context: Context) {
 
         Log.i(TAG, "✦ [AutoEQ CALIBRATION ENGAGED] ✦ Model: '${profile.displayName}', Target: '${profile.targetCurve}', Bands: ${profile.bands.size}")
 
-        // 1. Sync with Native C++ PEQ Bands
-        val handle = OboeAudioSink.currentActiveHandle
-        if (handle != 0L && OboeBridge.isAvailable) {
-            try {
-                OboeBridge.clearPeqBands(handle)
-                profile.bands.forEach { band ->
-                    OboeBridge.addPeqBand(
-                        handle = handle,
-                        type = band.filterType,
-                        frequency = band.frequencyHz,
-                        q = band.qFactor,
-                        gainDb = band.gainDb
-                    )
-                }
-                Log.i(TAG, "✓ Applied ${profile.bands.size} PEQ bands to Native C++ DSP")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to apply PEQ bands to Oboe", e)
-            }
-        }
-
-        // 2. Adjust pre-amp to prevent clipping from positive EQ gains
-        equalizerEngine?.let { eq ->
-            eq.setPreAmpGain((profile.preampDb).toFloat().coerceIn(-12.0f, 0.0f))
-        }
+        equalizerEngine?.applyAutoEqProfile(profile)
     }
 
     /**
-     * Disables AutoEQ calibration and clears native PEQ bands.
+     * Disables AutoEQ calibration and clears PEQ bands atomically through EqualizerEngine.
      */
     fun disableAutoEq(equalizerEngine: EqualizerEngine?) {
         _isAutoEqEnabled.value = false
         prefs.edit().putBoolean("auto_eq_enabled", false).apply()
 
-        val handle = OboeAudioSink.currentActiveHandle
-        if (handle != 0L && OboeBridge.isAvailable) {
-            try {
-                OboeBridge.clearPeqBands(handle)
-                Log.i(TAG, "✓ Cleared Native C++ PEQ bands")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to clear PEQ bands", e)
-            }
-        }
-        equalizerEngine?.setPreAmpGain(0.0f)
+        equalizerEngine?.disableAutoEq()
     }
 
     /**
@@ -106,6 +75,6 @@ class AutoEqEngine(private val context: Context) {
             .putBoolean("auto_eq_enabled", false)
             .apply()
 
-        disableAutoEq(equalizerEngine)
+        equalizerEngine?.clearAutoEq()
     }
 }

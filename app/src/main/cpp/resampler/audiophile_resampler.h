@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cmath>
 #include <atomic>
+#include <mutex>
 
 namespace antigravity {
 
@@ -81,6 +82,9 @@ private:
     static double blackmanNutall(double x);
 
     void migrateTo(const Config &cfg);
+
+    // Control-plane configuration serialization mutex (never acquired by audio render thread).
+    std::mutex configMutex_;
 
     // Preallocated triple-buffered pool for Config (zero shared_ptr, zero malloc/free on render thread).
     std::array<Config, 3> configPool_{};

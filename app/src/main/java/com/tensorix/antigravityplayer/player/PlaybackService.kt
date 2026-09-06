@@ -215,14 +215,17 @@ class PlaybackService : MediaSessionService() {
                     val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                     val dvcVol = (currentVolume.toDouble() / maxVolume.toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
-                    dspProcessor?.dvcVolume = dvcVol
-
-                    if (Math.abs(dvcVol - lastSentDvc) > 0.001) {
-                        lastSentDvc = dvcVol
-                        val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
-                        if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
-                            serviceScope.launch(Dispatchers.IO) {
-                                com.tensorix.antigravityplayer.audio.OboeBridge.setDvcVolume(handle, dvcVol)
+                    if (equalizerEngine != null) {
+                        equalizerEngine?.setDvcVolume(dvcVol)
+                    } else {
+                        dspProcessor?.dvcVolume = dvcVol
+                        if (Math.abs(dvcVol - lastSentDvc) > 0.001) {
+                            lastSentDvc = dvcVol
+                            val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
+                            if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
+                                serviceScope.launch(Dispatchers.IO) {
+                                    com.tensorix.antigravityplayer.audio.OboeBridge.setDvcVolume(handle, dvcVol)
+                                }
                             }
                         }
                     }
@@ -310,6 +313,7 @@ class PlaybackService : MediaSessionService() {
                             val sink = com.tensorix.antigravityplayer.audio.OboeAudioSink(
                                 context = context,
                                 dspProcessor = dspProcessor,
+                                equalizerEngine = equalizerEngine,
                                 bitPerfectMode = isBitPerfect,
                                 sampleRateMatchingInitial = _sampleRateMatching.value
                             )
@@ -520,7 +524,11 @@ class PlaybackService : MediaSessionService() {
         val isDspActive = !_bitPerfectMode.value && (equalizerEngine?.isEnabled?.value == true)
         val snapshot = outManager.currentSnapshot(trackInfo, isDspActive)
         _audiophileSnapshot.value = snapshot
-        _hiFiSupportedState.value = snapshot.output.activeRoute != null
+        val activeRoute = snapshot.output.activeRoute
+        val isHiFiSupported = activeRoute != null &&
+            activeRoute.routeType != com.tensorix.antigravityplayer.audio.AudioOutputRouteType.SPEAKER &&
+            com.tensorix.antigravityplayer.audio.HardwareHiFiVerifier.isHiFiCapable(applicationContext)
+        _hiFiSupportedState.value = isHiFiSupported
 
         snapshot.output.canonicalSnapshot?.let { canon ->
             HiFiBadgeState.updateFromSnapshot(canon)

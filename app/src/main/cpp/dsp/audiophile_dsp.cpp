@@ -43,7 +43,7 @@ void AudiophileDsp::publishSnapshotUnderLock() {
     computeCoefficients(controlParams_, peqDraft_, controlSampleRate_, slot.coeffs);
     slot.generation = ++publishedGeneration_;
 
-    writeSlot_ = cleanSlot_.exchange(writeSlot_, std::memory_order_release);
+    writeSlot_ = cleanSlot_.exchange(writeSlot_, std::memory_order_acq_rel);
     publishedGen_.store(slot.generation, std::memory_order_release);
 }
 
@@ -95,18 +95,33 @@ void AudiophileDsp::computeCoefficients(const DspParams &p,
 
     outCoeffs.peqCount = std::min(peqBands.size(), kMaxPeqBands);
     for (size_t i = 0; i < outCoeffs.peqCount; ++i) {
-        outCoeffs.peqActive[i] = peqBands[i];
+        const auto &inBand = peqBands[i];
+        if (std::isnan(inBand.frequency) || std::isinf(inBand.frequency) ||
+            std::isnan(inBand.q) || std::isinf(inBand.q) ||
+            std::isnan(inBand.gainDb) || std::isinf(inBand.gainDb)) {
+            outCoeffs.peqActive[i].enabled = false;
+            outCoeffs.peqL[i] = BiquadCoefficients{1.0, 0.0, 0.0, 0.0, 0.0};
+            outCoeffs.peqR[i] = BiquadCoefficients{1.0, 0.0, 0.0, 0.0, 0.0};
+            continue;
+        }
+        PeqBandParams safeBand = inBand;
+        safeBand.frequency = std::clamp(safeBand.frequency, 10.0, std::max(10.0, fs * 0.499));
+        safeBand.q = std::clamp(safeBand.q, 0.05, 100.0);
+        safeBand.gainDb = std::clamp(safeBand.gainDb, -36.0, 36.0);
+        outCoeffs.peqActive[i] = safeBand;
+
         BiquadCoefficients bc{1.0, 0.0, 0.0, 0.0, 0.0};
-        if (peqBands[i].enabled) {
-            switch (peqBands[i].type) {
-                case FilterType::PEAKING_EQ: bc = BiquadFilter::computePeakingEq(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
-                case FilterType::LOW_SHELF:  bc = BiquadFilter::computeLowShelf(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
-                case FilterType::HIGH_SHELF: bc = BiquadFilter::computeHighShelf(peqBands[i].frequency, peqBands[i].q, peqBands[i].gainDb, fs); break;
-                case FilterType::LOW_PASS:   bc = BiquadFilter::computeLowPass(peqBands[i].frequency, peqBands[i].q, fs); break;
-                case FilterType::HIGH_PASS:  bc = BiquadFilter::computeHighPass(peqBands[i].frequency, peqBands[i].q, fs); break;
-                case FilterType::BAND_PASS:  bc = BiquadFilter::computeBandPass(peqBands[i].frequency, peqBands[i].q, fs); break;
-                case FilterType::NOTCH:      bc = BiquadFilter::computeNotch(peqBands[i].frequency, peqBands[i].q, fs); break;
-                case FilterType::ALL_PASS:   bc = BiquadFilter::computeAllPass(peqBands[i].frequency, peqBands[i].q, fs); break;
+        if (safeBand.enabled) {
+            switch (safeBand.type) {
+                case FilterType::PEAKING_EQ: bc = BiquadFilter::computePeakingEq(safeBand.frequency, safeBand.q, safeBand.gainDb, fs); break;
+                case FilterType::LOW_SHELF:  bc = BiquadFilter::computeLowShelf(safeBand.frequency, safeBand.q, safeBand.gainDb, fs); break;
+                case FilterType::HIGH_SHELF: bc = BiquadFilter::computeHighShelf(safeBand.frequency, safeBand.q, safeBand.gainDb, fs); break;
+                case FilterType::LOW_PASS:   bc = BiquadFilter::computeLowPass(safeBand.frequency, safeBand.q, fs); break;
+                case FilterType::HIGH_PASS:  bc = BiquadFilter::computeHighPass(safeBand.frequency, safeBand.q, fs); break;
+                case FilterType::BAND_PASS:  bc = BiquadFilter::computeBandPass(safeBand.frequency, safeBand.q, fs); break;
+                case FilterType::NOTCH:      bc = BiquadFilter::computeNotch(safeBand.frequency, safeBand.q, fs); break;
+                case FilterType::ALL_PASS:   bc = BiquadFilter::computeAllPass(safeBand.frequency, safeBand.q, fs); break;
+                default: bc = BiquadCoefficients{1.0, 0.0, 0.0, 0.0, 0.0}; break;
             }
         }
         outCoeffs.peqL[i] = bc;
@@ -367,6 +382,19 @@ void AudiophileDsp::updatePeqBand(size_t index, FilterType type, double frequenc
         band.enabled = true;
         publishSnapshotUnderLock();
     }
+}
+
+void AudiophileDsp::setDspUnifiedConfig(const DspParams &newParams, const std::vector<PeqBandParams> &bands) {
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    controlParams_ = newParams;
+    bitPerfectBypassFlag_.store(newParams.bitPerfectBypass, std::memory_order_release);
+    peqDraft_.clear();
+    const size_t count = std::min(bands.size(), kMaxPeqBands);
+    for (size_t i = 0; i < count; ++i) {
+        peqDraft_.push_back(bands[i]);
+    }
+    controlParams_.peqActive = !peqDraft_.empty();
+    publishSnapshotUnderLock();
 }
 
 void AudiophileDsp::setPeqBandsBatch(const std::vector<PeqBandParams> &bands) {

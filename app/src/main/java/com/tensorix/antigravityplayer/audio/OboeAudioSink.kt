@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.annotation.WorkerThread
 import com.tensorix.antigravityplayer.player.PlaybackService
+import com.tensorix.antigravityplayer.player.EqualizerEngine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -58,6 +59,7 @@ data class ActiveStreamSnapshot(
 class OboeAudioSink(
     private val context: Context,
     private val dspProcessor: Audiophile64BitDspProcessor? = null,
+    private val equalizerEngine: EqualizerEngine? = null,
     private var bitPerfectMode: Boolean = false,
     sampleRateMatchingInitial: Boolean = true,
     private val onExclusiveModeChanged: (Boolean) -> Unit = {}
@@ -809,11 +811,15 @@ class OboeAudioSink(
         val targetVolume = if (bitPerfectMode) 1.0f else volume.coerceIn(0.0f, 1.0f)
         this.volume = targetVolume
         fallbackSink?.setVolume(targetVolume)
-        val handle = streamHandle
-        if (handle != 0L && OboeBridge.isAvailable) {
-            val dspVol = dspProcessor?.dvcVolume ?: 1.0
-            val effVol = if (bitPerfectMode) 1.0 else (targetVolume.toDouble() * dspVol).coerceIn(0.0, 1.0)
-            OboeBridge.setDvcVolume(handle, effVol)
+        if (equalizerEngine != null) {
+            equalizerEngine.setUserVolume(targetVolume.toDouble())
+        } else {
+            val handle = streamHandle
+            if (handle != 0L && OboeBridge.isAvailable) {
+                val dspVol = dspProcessor?.dvcVolume ?: 1.0
+                val effVol = if (bitPerfectMode) 1.0 else (targetVolume.toDouble() * dspVol).coerceIn(0.0, 1.0)
+                OboeBridge.setDvcVolume(handle, effVol)
+            }
         }
     }
 
@@ -938,7 +944,13 @@ class OboeAudioSink(
         )
         if (handle == 0L) return
 
-        if (OboeBridge.isAvailable) {
+        if (isPlaying) {
+            OboeBridge.startStream(handle)
+        }
+
+        if (equalizerEngine != null) {
+            equalizerEngine.syncWithNativeDsp(handle)
+        } else if (OboeBridge.isAvailable) {
             val dspVol = dspProcessor?.dvcVolume ?: 1.0
             val effVol = if (bitPerfectMode) 1.0 else (this.volume.toDouble() * dspVol).coerceIn(0.0, 1.0)
             OboeBridge.setDvcVolume(handle, effVol)
