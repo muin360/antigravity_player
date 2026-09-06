@@ -40,7 +40,7 @@ fun AudioVisualizer(
                 )
             )
         } else {
-            phase.stop()
+            phase.snapTo(0f)
         }
     }
 
