@@ -34,12 +34,29 @@ jobs:
         run: |
           sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
 
-      - name: Generate Release Keystore for CI
+      - name: Secret & Credential Leakage Scanner
         run: |
-          keytool -genkeypair -v -keystore app/release.keystore -alias antigravity \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass antigravity_release_pass -keypass antigravity_release_pass \
-            -dname "CN=Antigravity, OU=Audio, O=Antigravity, L=SanFrancisco, ST=CA, C=US"
+          echo "Scanning repository for committed credentials, private keys, and passwords..."
+          if git grep -i -E "BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY" -- ':!*.md' ':!.github/workflows/ci.yml'; then
+            echo "ERROR: Private key detected in repository!"
+            exit 1
+          fi
+          if git grep -E "antigravity_release_pass" -- ':!*.md' ':!.github/workflows/ci.yml'; then
+            echo "ERROR: Plaintext password detected in repository!"
+            exit 1
+          fi
+          echo "No committed secrets detected."
+
+      - name: Setup Ephemeral Non-Production Signing Key for CI
+        run: |
+          CI_KEY_PASS=$(openssl rand -hex 16)
+          keytool -genkeypair -v -keystore /tmp/ci_verification.keystore -alias ci_verify \
+            -keyalg RSA -keysize 2048 -validity 1 \
+            -storepass "$CI_KEY_PASS" -keypass "$CI_KEY_PASS" \
+            -dname "CN=AntigravityCI, OU=Testing, O=Antigravity, L=SanFrancisco, ST=CA, C=US"
+          echo "CI_KEYSTORE_PATH=/tmp/ci_verification.keystore" >> $GITHUB_ENV
+          echo "CI_KEYSTORE_PASS=$CI_KEY_PASS" >> $GITHUB_ENV
+          echo "CI_KEY_ALIAS=ci_verify" >> $GITHUB_ENV
 
       - name: Grant Execute Permission to Gradlew
         run: chmod +x gradlew
@@ -53,13 +70,13 @@ jobs:
       - name: Assemble Debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Assemble Release APK (R8 & Minification)
+      - name: Assemble Release APK (R8 & Minification Verification)
         run: ./gradlew assembleRelease --no-daemon --stacktrace
         env:
-          ANTIGRAVITY_RELEASE_STORE_FILE: release.keystore
-          ANTIGRAVITY_RELEASE_STORE_PASSWORD: antigravity_release_pass
-          ANTIGRAVITY_RELEASE_KEY_ALIAS: antigravity
-          ANTIGRAVITY_RELEASE_KEY_PASSWORD: antigravity_release_pass
+          ANTIGRAVITY_RELEASE_STORE_FILE: ${{ env.CI_KEYSTORE_PATH }}
+          ANTIGRAVITY_RELEASE_STORE_PASSWORD: ${{ env.CI_KEYSTORE_PASS }}
+          ANTIGRAVITY_RELEASE_KEY_ALIAS: ${{ env.CI_KEY_ALIAS }}
+          ANTIGRAVITY_RELEASE_KEY_PASSWORD: ${{ env.CI_KEYSTORE_PASS }}
 
       - name: Upload Test Results
         if: always()

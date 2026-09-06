@@ -153,6 +153,7 @@ public:
     void clearPeqBands();
     void addPeqBand(FilterType type, double frequency, double q, double gainDb);
     void updatePeqBand(size_t index, FilterType type, double frequency, double q, double gainDb);
+    void setPeqBandsBatch(const std::vector<PeqBandParams> &bands);
 
     // Telemetry (atomic, safe from any thread)
     double getPeakL() const { return peakL_.load(std::memory_order_relaxed); }
@@ -198,6 +199,7 @@ private:
     // ---- Lock-Free Triple Buffer Exchange ---------------------------------
     std::array<DspSnapshot, 3> snapshotPool_{};
     std::atomic<int> cleanSlot_{0};
+    std::atomic<uint64_t> publishedGen_{1};
     int writeSlot_ = 2;
 
     std::atomic<bool> bitPerfectBypassFlag_{false};

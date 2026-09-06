@@ -141,10 +141,35 @@ class OboeAudioSink(
     private var lastSpecifiedBufferSize: Int = 0
     private var lastOutputChannels: IntArray? = null
 
-    // Set permanently when native cannot support the current format; all
-    // subsequent traffic routes to DefaultAudioSink until reset().
+    data class UnsupportedFormatScope(
+        val sampleRate: Int,
+        val channelCount: Int,
+        val pcmEncoding: Int,
+        val deviceId: Int,
+        val reason: String
+    )
+
     @Volatile
-    private var nativeUnsupported: Boolean = false
+    private var unsupportedScope: UnsupportedFormatScope? = null
+
+    val isNativeUnsupportedForCurrent: Boolean
+        get() {
+            val s = unsupportedScope ?: return false
+            return s.sampleRate == sampleRate &&
+                   s.channelCount == channelCount &&
+                   s.pcmEncoding == pcmEncoding &&
+                   s.deviceId == (preferredDevice?.id ?: 0)
+        }
+
+    var nativeUnsupported: Boolean
+        get() = isNativeUnsupportedForCurrent
+        set(value) {
+            unsupportedScope = if (value) {
+                UnsupportedFormatScope(sampleRate, channelCount, pcmEncoding, preferredDevice?.id ?: 0, "explicit_set")
+            } else {
+                null
+            }
+        }
 
     /**
      * P0 dead-control fix: this flag is now LIVE. ON = open the device stream
@@ -715,7 +740,7 @@ class OboeAudioSink(
         // Native Oboe does not implement sonic time/pitch stretching; returning non-1.0x
         // causes Media3 position calculation drift. When native is active, report DEFAULT.
         return if (fallbackSink != null) {
-            fallbackSink?.playbackParameters ?: PlaybackParameters.DEFAULT
+            fallbackSink?.playbackParameters ?: playbackParameters
         } else {
             PlaybackParameters.DEFAULT
         }
@@ -758,8 +783,14 @@ class OboeAudioSink(
     }
 
     override fun setPreferredDevice(audioDeviceInfo: AudioDeviceInfo?) {
+        if (this.preferredDevice == audioDeviceInfo) return
         this.preferredDevice = audioDeviceInfo
         fallbackSink?.setPreferredDevice(audioDeviceInfo)
+        synchronized(lifecycleLock) {
+            if (streamHandle != 0L) {
+                reconfigureRoute(preferredDevice = audioDeviceInfo)
+            }
+        }
     }
 
     override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) {

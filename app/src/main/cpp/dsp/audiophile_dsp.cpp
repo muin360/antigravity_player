@@ -30,6 +30,7 @@ AudiophileDsp::AudiophileDsp() {
     appliedGeneration_ = 1;
 
     cleanSlot_.store(0, std::memory_order_relaxed);
+    publishedGen_.store(1, std::memory_order_relaxed);
     readSlot_ = 1;
     writeSlot_ = 2;
 
@@ -43,6 +44,7 @@ void AudiophileDsp::publishSnapshotUnderLock() {
     slot.generation = ++publishedGeneration_;
 
     writeSlot_ = cleanSlot_.exchange(writeSlot_, std::memory_order_release);
+    publishedGen_.store(slot.generation, std::memory_order_release);
 }
 
 void AudiophileDsp::computeCoefficients(const DspParams &p,
@@ -367,6 +369,17 @@ void AudiophileDsp::updatePeqBand(size_t index, FilterType type, double frequenc
     }
 }
 
+void AudiophileDsp::setPeqBandsBatch(const std::vector<PeqBandParams> &bands) {
+    std::lock_guard<std::mutex> lk(paramWriteMutex_);
+    peqDraft_.clear();
+    const size_t count = std::min(bands.size(), kMaxPeqBands);
+    for (size_t i = 0; i < count; ++i) {
+        peqDraft_.push_back(bands[i]);
+    }
+    controlParams_.peqActive = !peqDraft_.empty();
+    publishSnapshotUnderLock();
+}
+
 void AudiophileDsp::reset() {
     resetEpoch_.fetch_add(1, std::memory_order_release);
 }
@@ -414,13 +427,15 @@ void AudiophileDsp::process(float *audioData, int32_t numFrames, int32_t channel
     }
 
     // 2. Lock-free parameter & coefficient update check
-    const int clean = cleanSlot_.load(std::memory_order_acquire);
-    if (snapshotPool_[clean].generation != appliedGeneration_) {
+    // Safe triple-buffer acquisition: check published generation first without reading unowned slot memory.
+    if (publishedGen_.load(std::memory_order_acquire) != appliedGeneration_) {
         readSlot_ = cleanSlot_.exchange(readSlot_, std::memory_order_acq_rel);
         const DspSnapshot &snap = snapshotPool_[readSlot_];
-        active_ = snap.params;
-        appliedGeneration_ = snap.generation;
-        applySnapshot(snap);
+        if (snap.generation != appliedGeneration_) {
+            active_ = snap.params;
+            appliedGeneration_ = snap.generation;
+            applySnapshot(snap);
+        }
     }
 
     // 3. Bit-perfect / disabled: strict passthrough, telemetry only.

@@ -10,48 +10,54 @@ AudiophileResampler::AudiophileResampler() {
     historyBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES) * MAX_CHANNELS, 0.0f);
     workBuffer_.assign(static_cast<size_t>(MAX_HISTORY_FRAMES + MAX_INPUT_FRAMES) * MAX_CHANNELS, 0.0f);
     outputBuffer_.assign(static_cast<size_t>(MAX_OUTPUT_FRAMES) * MAX_CHANNELS, 0.0f);
+
+    for (auto &cfg : configPool_) {
+        populateConfig(cfg, 48000, 48000, 2, ResampleQuality::SINC_FAST, 1);
+    }
+    activeGeneration_ = configPool_[renderSlot_].generation;
 }
 
-std::shared_ptr<const AudiophileResampler::Config> AudiophileResampler::buildConfig(
+void AudiophileResampler::populateConfig(
+    Config &cfg,
     int32_t inSampleRate, int32_t outSampleRate, int32_t channelCount,
     ResampleQuality quality, uint64_t generation) {
 
-    auto cfg = std::make_shared<Config>();
-    cfg->channelCount = std::clamp(channelCount, 1, MAX_CHANNELS);
-    cfg->quality = quality;
+    cfg.channelCount = std::clamp(channelCount, 1, MAX_CHANNELS);
+    cfg.quality = quality;
     const double inRate = std::max(1.0, static_cast<double>(inSampleRate));
     const double outRate = std::max(1.0, static_cast<double>(outSampleRate));
-    cfg->ratio = inRate / outRate;
-    cfg->passThrough =
+    cfg.ratio = inRate / outRate;
+    cfg.passThrough =
         inSampleRate <= 0 || outSampleRate <= 0 || inSampleRate == outSampleRate;
-    cfg->taps = (quality == ResampleQuality::SINC_BEST) ? 64
+    cfg.taps = (quality == ResampleQuality::SINC_BEST) ? 64
               : ((quality == ResampleQuality::SINC_FAST) ? 16 : 4);
-    cfg->halfTaps = cfg->taps / 2;
-    cfg->generation = generation;
+    cfg.halfTaps = cfg.taps / 2;
+    cfg.generation = generation;
+    cfg.polyphaseTable.fill(0.0);
 
-    if (!cfg->passThrough) {
+    if (!cfg.passThrough) {
         // Windowed-sinc polyphase bank. Stopband behaviour depends on tap
-        // count and the Blackman-Nutall window; no specific SNR figure is
-        // claimed without measurement (see docs/final-forensic-remediation-report.md).
-        const double cutoff = (cfg->ratio > 1.0) ? (0.95 / cfg->ratio) : 0.95;
-        cfg->polyphaseTable.assign(NUM_PHASES, std::vector<double>(cfg->taps, 0.0));
+        // count and the Blackman-Nutall window.
+        const double cutoff = (cfg.ratio > 1.0) ? (0.95 / cfg.ratio) : 0.95;
 
         for (int phase = 0; phase < NUM_PHASES; ++phase) {
             const double phaseFrac = static_cast<double>(phase) / NUM_PHASES;
             double sumWeights = 0.0;
-            for (int t = 0; t < cfg->taps; ++t) {
-                const double delta = (t - cfg->halfTaps) - phaseFrac;
+            const size_t phaseOffset = static_cast<size_t>(phase) * MAX_TAPS;
+            for (int t = 0; t < cfg.taps; ++t) {
+                const double delta = (t - cfg.halfTaps) - phaseFrac;
                 const double weight =
-                    blackmanNutall(delta / cfg->halfTaps) * sinc(delta * cutoff) * cutoff;
-                cfg->polyphaseTable[phase][t] = weight;
+                    blackmanNutall(delta / cfg.halfTaps) * sinc(delta * cutoff) * cutoff;
+                cfg.polyphaseTable[phaseOffset + t] = weight;
                 sumWeights += weight;
             }
             if (std::abs(sumWeights) > 1.0e-9) {
-                for (int t = 0; t < cfg->taps; ++t) cfg->polyphaseTable[phase][t] /= sumWeights;
+                for (int t = 0; t < cfg.taps; ++t) {
+                    cfg.polyphaseTable[phaseOffset + t] /= sumWeights;
+                }
             }
         }
     }
-    return cfg;
 }
 
 double AudiophileResampler::sinc(double x) {
@@ -76,22 +82,26 @@ double AudiophileResampler::blackmanNutall(double x) {
 
 void AudiophileResampler::configure(int32_t inSampleRate, int32_t outSampleRate,
                                     int32_t channelCount, ResampleQuality quality) {
-    pendingInRate_ = inSampleRate;
-    pendingOutRate_ = outSampleRate;
+    pendingInRate_.store(inSampleRate, std::memory_order_relaxed);
+    pendingOutRate_.store(outSampleRate, std::memory_order_relaxed);
     static std::atomic<uint64_t> gGenerationSequence{1};
     const uint64_t gen = gGenerationSequence.fetch_add(1, std::memory_order_relaxed);
-    auto cfg = buildConfig(inSampleRate, outSampleRate, channelCount, quality, gen);
-    // Atomic publish: any concurrent process() keeps using the previous
-    // complete configuration until it loads the new pointer.
-    std::atomic_store_explicit(&published_, std::shared_ptr<const Config>(cfg),
-                               std::memory_order_release);
+
+    // Populate control-thread-owned writeSlot_
+    Config &targetCfg = configPool_[writeSlot_];
+    populateConfig(targetCfg, inSampleRate, outSampleRate, channelCount, quality, gen);
+
+    isPassThrough_.store(targetCfg.passThrough, std::memory_order_release);
+
+    // Atomic triple-buffer swap: exchange writeSlot_ with cleanSlot_
+    writeSlot_ = cleanSlot_.exchange(writeSlot_, std::memory_order_acq_rel);
+
+    // Publish new generation
+    publishedGen_.store(gen, std::memory_order_release);
 }
 
 bool AudiophileResampler::isPassThrough() const {
-    if (auto cfg = std::atomic_load_explicit(&published_, std::memory_order_acquire)) {
-        return cfg->passThrough;
-    }
-    return true;
+    return isPassThrough_.load(std::memory_order_acquire);
 }
 
 void AudiophileResampler::reset() {
@@ -113,16 +123,17 @@ AudiophileResampler::Result AudiophileResampler::process(
     Result result;
     if (!inData || inFrames <= 0) return result;
 
-    auto cfg = std::atomic_load_explicit(&published_, std::memory_order_acquire);
-    if (!cfg) { result.inputFramesConsumed = 0; return result; }
-
-    if (cfg != active_) {
-        migrateTo(*cfg);   // one-time state migration on the render thread (allocation-free)
-        active_ = cfg;
-        activeGeneration_ = cfg->generation;
+    const uint64_t pubGen = publishedGen_.load(std::memory_order_acquire);
+    if (pubGen != activeGeneration_) {
+        // Exchange renderSlot_ with cleanSlot_ to acquire the latest published config
+        renderSlot_ = cleanSlot_.exchange(renderSlot_, std::memory_order_acq_rel);
+        const Config &newCfg = configPool_[renderSlot_];
+        activeGeneration_ = newCfg.generation;
+        migrateTo(newCfg);
     }
 
-    const int32_t ch = std::clamp(cfg->channelCount, 1, MAX_CHANNELS);
+    const Config &cfg = configPool_[renderSlot_];
+    const int32_t ch = std::clamp(cfg.channelCount, 1, MAX_CHANNELS);
 
     if (resetRequested_.exchange(false, std::memory_order_acq_rel)) {
         timePos_ = 0.0;
@@ -130,7 +141,7 @@ AudiophileResampler::Result AudiophileResampler::process(
         std::fill(historyBuffer_.begin(), historyBuffer_.begin() + activeHistorySamples, 0.0f);
     }
 
-    if (cfg->passThrough) {
+    if (cfg.passThrough) {
         // Direct zero-copy pass-through: caller receives the exact input pointer
         result.outputFrames = inFrames;
         result.inputFramesConsumed = inFrames;
@@ -141,9 +152,9 @@ AudiophileResampler::Result AudiophileResampler::process(
     // Safety clamp to guaranteed preallocated capacity: NEVER reallocate on audio thread
     const int32_t clampedInFrames = std::min(inFrames, MAX_INPUT_FRAMES);
 
-    const double ratio = cfg->ratio;
-    const int taps = cfg->taps;
-    const int halfTaps = cfg->halfTaps;
+    const double ratio = cfg.ratio;
+    const int taps = cfg.taps;
+    const int halfTaps = cfg.halfTaps;
 
     const int32_t historyFrames = MAX_HISTORY_FRAMES;
     const size_t historySamples = static_cast<size_t>(historyFrames) * static_cast<size_t>(ch);
@@ -162,7 +173,7 @@ AudiophileResampler::Result AudiophileResampler::process(
         const int32_t baseInFrame = static_cast<int32_t>(std::floor(currentInTime));
         const double frac = currentInTime - baseInFrame;
 
-        if (cfg->quality == ResampleQuality::HERMITE_FAST) {
+        if (cfg.quality == ResampleQuality::HERMITE_FAST) {
             // 4-point Hermite cubic interpolation
             for (int32_t c = 0; c < ch; ++c) {
                 const int32_t f0 = std::clamp(baseInFrame - 1, 0, totalWorkFrames - 1);
@@ -190,8 +201,8 @@ AudiophileResampler::Result AudiophileResampler::process(
             const int phase2 = (phase1 + 1 < static_cast<int>(NUM_PHASES)) ? (phase1 + 1) : phase1;
             const double phaseFrac = phaseRaw - std::floor(phaseRaw);
             
-            const auto &phaseWeights1 = cfg->polyphaseTable[phase1];
-            const auto &phaseWeights2 = cfg->polyphaseTable[phase2];
+            const size_t offset1 = static_cast<size_t>(phase1) * MAX_TAPS;
+            const size_t offset2 = static_cast<size_t>(phase2) * MAX_TAPS;
 
             for (int32_t c = 0; c < ch; ++c) {
                 double sample1 = 0.0;
@@ -203,8 +214,8 @@ AudiophileResampler::Result AudiophileResampler::process(
                     const int32_t srcFrame =
                         std::clamp(baseInFrame - halfTaps + t, 0, totalWorkFrames - 1);
                     const double srcSample = workBuffer_[static_cast<size_t>(srcFrame) * ch + c];
-                    sample1 += srcSample * phaseWeights1[t];
-                    sample2 += srcSample * phaseWeights2[t];
+                    sample1 += srcSample * cfg.polyphaseTable[offset1 + t];
+                    sample2 += srcSample * cfg.polyphaseTable[offset2 + t];
                 }
                 
                 const double sample = sample1 + (sample2 - sample1) * phaseFrac;

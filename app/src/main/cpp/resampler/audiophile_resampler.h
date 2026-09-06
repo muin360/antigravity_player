@@ -1,9 +1,9 @@
 #pragma once
 
 #include <vector>
+#include <array>
 #include <cstdint>
 #include <cmath>
-#include <memory>
 #include <atomic>
 
 namespace antigravity {
@@ -21,6 +21,8 @@ public:
     static constexpr int32_t MAX_HISTORY_FRAMES = 128;
     // Support upsampling up to 384 kHz (8.7x). Sized for up to 8 channels.
     static constexpr int32_t MAX_OUTPUT_FRAMES = 73728;
+    static constexpr int32_t NUM_PHASES = 64;
+    static constexpr int32_t MAX_TAPS = 64;
 
     // Explicit data-plane contract for one process() call.
     //   outputFrames       : frames produced and available at outputData
@@ -37,13 +39,17 @@ public:
     AudiophileResampler();
     ~AudiophileResampler() = default;
 
+    // Non-copyable, non-movable to guarantee stability of internal fixed workspaces.
+    AudiophileResampler(const AudiophileResampler &) = delete;
+    AudiophileResampler &operator=(const AudiophileResampler &) = delete;
+
     // Control-thread only. Builds a complete immutable configuration and
-    // publishes it atomically. Streaming state is migrated by the render
-    // thread at the next process() call (never torn mid-block).
+    // publishes it atomically via triple-buffer exchange.
+    // Streaming state is migrated by the render thread at the next process() call (never torn mid-block).
     void configure(int32_t inSampleRate, int32_t outSampleRate, int32_t channelCount,
                    ResampleQuality quality = ResampleQuality::SINC_FAST);
 
-    // Render-thread call. Truly allocation-free: uses preallocated workspaces.
+    // Render-thread call. Truly allocation-free and lock-free: uses preallocated workspaces.
     Result process(const float *inData, int32_t inFrames);
 
     // Safe to call from any thread: defers the actual state clear to the
@@ -51,8 +57,8 @@ public:
     void reset();
 
     bool isPassThrough() const;
-    int32_t getInputSampleRate() const { return pendingInRate_; }
-    int32_t getOutputSampleRate() const { return pendingOutRate_; }
+    int32_t getInputSampleRate() const { return pendingInRate_.load(std::memory_order_relaxed); }
+    int32_t getOutputSampleRate() const { return pendingOutRate_.load(std::memory_order_relaxed); }
 
 private:
     struct Config {
@@ -63,12 +69,11 @@ private:
         int halfTaps = 8;
         bool passThrough = true;
         uint64_t generation = 0;     // bumped on every configure()
-        std::vector<std::vector<double>> polyphaseTable; // NUM_PHASES x taps
+        // Flat polyphase table: NUM_PHASES x MAX_TAPS, zero dynamic allocations
+        std::array<double, NUM_PHASES * MAX_TAPS> polyphaseTable{};
     };
 
-    static constexpr int32_t NUM_PHASES = 64;
-
-    static std::shared_ptr<const Config> buildConfig(
+    static void populateConfig(Config &cfg,
         int32_t inSampleRate, int32_t outSampleRate, int32_t channelCount,
         ResampleQuality quality, uint64_t generation);
 
@@ -77,14 +82,19 @@ private:
 
     void migrateTo(const Config &cfg);
 
-    // Immutable published configuration (atomic shared_ptr access).
-    std::shared_ptr<const Config> published_;
-    int32_t pendingInRate_ = 48000;
-    int32_t pendingOutRate_ = 48000;
+    // Preallocated triple-buffered pool for Config (zero shared_ptr, zero malloc/free on render thread).
+    std::array<Config, 3> configPool_{};
+    std::atomic<int> cleanSlot_{0};
+    int writeSlot_{2};
+    int renderSlot_{1};
+    std::atomic<uint64_t> publishedGen_{1};
+    uint64_t activeGeneration_{0};
+
+    std::atomic<bool> isPassThrough_{true};
+    std::atomic<int32_t> pendingInRate_{48000};
+    std::atomic<int32_t> pendingOutRate_{48000};
 
     // Render-thread-owned streaming state (preallocated, never resized on audio thread).
-    std::shared_ptr<const Config> active_;
-    uint64_t activeGeneration_ = 0;
     double timePos_ = 0.0;
     std::vector<float> historyBuffer_;
     std::vector<float> workBuffer_;
@@ -95,4 +105,5 @@ private:
 };
 
 } // namespace antigravity
+
 

@@ -54,6 +54,90 @@ int32_t bytesPerSampleFor(jint pcmEncoding) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Explicit 11-state Native Audio Stream Lifecycle FSM (P0 Subsystem 5)
+// ---------------------------------------------------------------------------
+enum class NativeLifecycleState : int32_t {
+    UNINITIALIZED = 0,
+    OPENING       = 1,
+    OPEN          = 2,
+    STARTING      = 3,
+    STARTED       = 4,
+    PAUSED        = 5,
+    FLUSHING      = 6,
+    STOPPING      = 7,
+    CLOSING       = 8,
+    CLOSED        = 9,
+    FAILED        = 10
+};
+
+inline const char* nativeLifecycleStateToString(NativeLifecycleState state) {
+    switch (state) {
+        case NativeLifecycleState::UNINITIALIZED: return "UNINITIALIZED";
+        case NativeLifecycleState::OPENING:       return "OPENING";
+        case NativeLifecycleState::OPEN:          return "OPEN";
+        case NativeLifecycleState::STARTING:      return "STARTING";
+        case NativeLifecycleState::STARTED:       return "STARTED";
+        case NativeLifecycleState::PAUSED:        return "PAUSED";
+        case NativeLifecycleState::FLUSHING:      return "FLUSHING";
+        case NativeLifecycleState::STOPPING:      return "STOPPING";
+        case NativeLifecycleState::CLOSING:       return "CLOSING";
+        case NativeLifecycleState::CLOSED:        return "CLOSED";
+        case NativeLifecycleState::FAILED:        return "FAILED";
+    }
+    return "UNKNOWN";
+}
+
+inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycleState to) {
+    if (from == to) return true;
+    switch (from) {
+        case NativeLifecycleState::UNINITIALIZED:
+            return to == NativeLifecycleState::OPENING;
+        case NativeLifecycleState::OPENING:
+            return to == NativeLifecycleState::OPEN ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::OPEN:
+            return to == NativeLifecycleState::STARTING ||
+                   to == NativeLifecycleState::CLOSING ||
+                   to == NativeLifecycleState::FAILED;
+        case NativeLifecycleState::STARTING:
+            return to == NativeLifecycleState::STARTED ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::STARTED:
+            return to == NativeLifecycleState::PAUSED ||
+                   to == NativeLifecycleState::FLUSHING ||
+                   to == NativeLifecycleState::STOPPING ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::PAUSED:
+            return to == NativeLifecycleState::STARTING ||
+                   to == NativeLifecycleState::STARTED ||
+                   to == NativeLifecycleState::FLUSHING ||
+                   to == NativeLifecycleState::STOPPING ||
+                   to == NativeLifecycleState::CLOSING ||
+                   to == NativeLifecycleState::FAILED;
+        case NativeLifecycleState::FLUSHING:
+            return to == NativeLifecycleState::PAUSED ||
+                   to == NativeLifecycleState::STARTED ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::STOPPING:
+            return to == NativeLifecycleState::CLOSED ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::CLOSING:
+            return to == NativeLifecycleState::CLOSED;
+        case NativeLifecycleState::FAILED:
+            return to == NativeLifecycleState::CLOSING ||
+                   to == NativeLifecycleState::CLOSED;
+        case NativeLifecycleState::CLOSED:
+            return to == NativeLifecycleState::OPENING;
+    }
+    return false;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -71,6 +155,25 @@ int32_t bytesPerSampleFor(jint pcmEncoding) {
 class OboeStreamWrapper : public oboe::AudioStreamErrorCallback {
 public:
     uint64_t generationId = 0;
+    std::atomic<NativeLifecycleState> lifecycleState_{NativeLifecycleState::UNINITIALIZED};
+
+    bool transitionState(NativeLifecycleState target) {
+        NativeLifecycleState current = lifecycleState_.load(std::memory_order_acquire);
+        while (true) {
+            if (!isLegalLifecycleTransition(current, target)) {
+                LOGW("Illegal native stream lifecycle transition: %s -> %s (gen=%llu)",
+                     nativeLifecycleStateToString(current),
+                     nativeLifecycleStateToString(target),
+                     static_cast<unsigned long long>(generationId));
+                return false;
+            }
+            if (lifecycleState_.compare_exchange_weak(current, target,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire)) {
+                return true;
+            }
+        }
+    }
 
     std::shared_ptr<oboe::AudioStream> stream = nullptr;
     antigravity::AudiophileDsp dsp;
@@ -230,6 +333,7 @@ public:
         if (!isActive.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
+        transitionState(NativeLifecycleState::CLOSING);
         // Quiescence wait: wait until any active audio writer has finished writing.
         // Hot-path writes are bounded by kWriteTimeoutNs (20ms), so this completes in at most a few ms.
         while (activeWriters_.load(std::memory_order_acquire) > 0) {
@@ -253,12 +357,14 @@ public:
         consecutiveTimeouts.store(0, std::memory_order_relaxed);
         resampler.reset();
         dsp.reset();
+        transitionState(NativeLifecycleState::CLOSED);
     }
 
     void flush() {
         {
             std::lock_guard<std::mutex> lock(lifecycleMutex);
             if (stream && isActive.load(std::memory_order_acquire)) {
+                transitionState(NativeLifecycleState::FLUSHING);
                 auto state = stream->getState();
                 // P0-6: Never issue flush() while state is Pausing or Started.
                 // Wait/observe until state reaches a legal flush state.
@@ -285,6 +391,7 @@ public:
                     }
                 }
                 hardwareFramesBaseline_.store(std::max<int64_t>(0, baseFrames), std::memory_order_release);
+                transitionState(NativeLifecycleState::PAUSED);
             } else {
                 hardwareFramesBaseline_.store(0, std::memory_order_release);
             }
@@ -309,6 +416,7 @@ public:
         if (stream && isActive.load(std::memory_order_acquire) &&
             stream->getState() == oboe::StreamState::Started) {
             stream->requestPause();
+            transitionState(NativeLifecycleState::PAUSED);
         }
     }
 
@@ -319,7 +427,12 @@ public:
             if (state == oboe::StreamState::Paused ||
                 state == oboe::StreamState::Open ||
                 state == oboe::StreamState::Flushed) {
-                stream->requestStart();
+                transitionState(NativeLifecycleState::STARTING);
+                if (stream->requestStart() == oboe::Result::OK) {
+                    transitionState(NativeLifecycleState::STARTED);
+                } else {
+                    transitionState(NativeLifecycleState::FAILED);
+                }
             }
         }
     }
@@ -408,6 +521,7 @@ public:
         LOGW("Oboe stream disconnect/error: %s (gen=%llu)",
              oboe::convertToText(error),
              static_cast<unsigned long long>(generationId));
+        transitionState(NativeLifecycleState::FAILED);
         isActive.store(false, std::memory_order_release);
         rawStream_.store(nullptr, std::memory_order_release);
         std::lock_guard<std::mutex> lock(lifecycleMutex);
@@ -431,11 +545,15 @@ public:
 namespace {
     constexpr size_t kMaxRegistrySlots = 32;
 
+    constexpr uint32_t kLeaseReaderMask = 0x3FFFFFFFu;
+    constexpr uint32_t kLeaseDraining   = 0x40000000u;
+    constexpr uint32_t kLeaseActive     = 0x80000000u;
+
     struct StreamSlot {
         std::atomic<jlong> handle{0};
         std::atomic<uint64_t> generationId{0};
         std::atomic<OboeStreamWrapper*> wrapper{nullptr};
-        std::atomic<uint32_t> activeUsers{0};
+        std::atomic<uint32_t> leaseState{0};
     };
 
     std::array<StreamSlot, kMaxRegistrySlots> gStreamSlots{};
@@ -451,7 +569,7 @@ namespace {
 
         ~SlotLease() {
             if (slot) {
-                slot->activeUsers.fetch_sub(1, std::memory_order_release);
+                slot->leaseState.fetch_sub(1, std::memory_order_release);
             }
         }
     };
@@ -463,7 +581,21 @@ namespace {
             const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
             auto &slot = gStreamSlots[idx];
             if (slot.handle.load(std::memory_order_relaxed) == handle) {
-                slot.activeUsers.fetch_add(1, std::memory_order_acquire);
+                // Ticketed lease admission:
+                // Atomically increment reader count ONLY if slot is ACTIVE and NOT DRAINING.
+                uint32_t current = slot.leaseState.load(std::memory_order_relaxed);
+                while (true) {
+                    if ((current & kLeaseActive) == 0 || (current & kLeaseDraining) != 0) {
+                        return nullptr; // Draining or inactive: admission refused!
+                    }
+                    if (slot.leaseState.compare_exchange_weak(current, current + 1,
+                                                              std::memory_order_acquire,
+                                                              std::memory_order_relaxed)) {
+                        break; // Reader ownership established!
+                    }
+                }
+
+                // Verify handle and generation under established lease
                 if (slot.handle.load(std::memory_order_acquire) == handle &&
                     (generation == 0 || slot.generationId.load(std::memory_order_acquire) == static_cast<uint64_t>(generation))) {
                     OboeStreamWrapper *w = slot.wrapper.load(std::memory_order_acquire);
@@ -473,7 +605,8 @@ namespace {
                         return w;
                     }
                 }
-                slot.activeUsers.fetch_sub(1, std::memory_order_release);
+                // Validation failed or stream inactive: back out atomically
+                slot.leaseState.fetch_sub(1, std::memory_order_release);
                 return nullptr;
             }
         }
@@ -488,7 +621,6 @@ namespace {
         return nullptr;
     }
 
-
     jlong registerStream(const std::shared_ptr<OboeStreamWrapper> &wrapper) {
         const jlong handle = gNextHandle.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(gRegistryMutex);
@@ -500,10 +632,11 @@ namespace {
             const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
             auto &slot = gStreamSlots[idx];
             if (slot.handle.load(std::memory_order_relaxed) == 0 &&
-                slot.activeUsers.load(std::memory_order_relaxed) == 0) {
+                slot.leaseState.load(std::memory_order_relaxed) == 0) {
                 slot.generationId.store(wrapper->generationId, std::memory_order_relaxed);
                 slot.wrapper.store(wrapper.get(), std::memory_order_relaxed);
-                slot.handle.store(handle, std::memory_order_release);
+                slot.handle.store(handle, std::memory_order_relaxed);
+                slot.leaseState.store(kLeaseActive, std::memory_order_release);
                 published = true;
                 break;
             }
@@ -523,10 +656,10 @@ namespace {
         StreamSlot *slotToDrain = nullptr;
         {
             std::lock_guard<std::mutex> lock(gRegistryMutex);
-            // 1. Invalidate handle in slot table so no new writes can acquire lease
+            // 1. Transition slot to DRAINING so no new leases can be admitted
             for (auto &slot : gStreamSlots) {
                 if (slot.handle.load(std::memory_order_relaxed) == handle) {
-                    slot.handle.store(0, std::memory_order_release);
+                    slot.leaseState.fetch_or(kLeaseDraining, std::memory_order_acq_rel);
                     slotToDrain = &slot;
                     break;
                 }
@@ -539,15 +672,17 @@ namespace {
             }
         }
 
-        // 2. Wait for active users in writeDirect to finish OUTSIDE gRegistryMutex
-        // This eliminates contention and prevents blocking openStream() on other threads.
+        // 2. Wait for active leased readers to finish OUTSIDE gRegistryMutex
         if (slotToDrain) {
-            while (slotToDrain->activeUsers.load(std::memory_order_acquire) > 0) {
-                struct timespec req = {0, 500000L}; // 0.5 ms
+            while ((slotToDrain->leaseState.load(std::memory_order_acquire) & kLeaseReaderMask) > 0) {
+                struct timespec req = {0, 200000L}; // 0.2 ms
                 nanosleep(&req, nullptr);
             }
+            // All readers have finished; safely clear slot
             slotToDrain->wrapper.store(nullptr, std::memory_order_release);
+            slotToDrain->handle.store(0, std::memory_order_release);
             slotToDrain->generationId.store(0, std::memory_order_relaxed);
+            slotToDrain->leaseState.store(0, std::memory_order_release);
         }
 
         // 3. Close stream safely
@@ -576,6 +711,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     // Rule 4: Step 2 - Calculate maximum required memory & preallocate buffers
     const uint64_t gen = gGenerationSequence.fetch_add(1, std::memory_order_relaxed);
     auto wrapper = std::make_shared<OboeStreamWrapper>(gen);
+    wrapper->transitionState(NativeLifecycleState::OPENING);
     wrapper->configuredSampleRate = sampleRate;
     wrapper->configuredChannelCount = channelCount;
 
@@ -644,8 +780,10 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
 
     if (result != oboe::Result::OK || !wrapper->stream) {
         LOGE("Failed to open Oboe stream: %s", oboe::convertToText(result));
+        wrapper->transitionState(NativeLifecycleState::FAILED);
         return 0;
     }
+    wrapper->transitionState(NativeLifecycleState::OPEN);
 
     // Rule 4: Step 5 - Validate actual stream parameters & reconcile
     const int32_t actualChannels = wrapper->stream->getChannelCount();
@@ -663,12 +801,15 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
                                  actualChannels, antigravity::ResampleQuality::SINC_FAST);
 
     // Rule 4: Step 6 - Start stream only after render-path is 100% prepared
+    wrapper->transitionState(NativeLifecycleState::STARTING);
     result = wrapper->stream->requestStart();
     if (result != oboe::Result::OK) {
         LOGE("Failed to start Oboe stream: %s", oboe::convertToText(result));
+        wrapper->transitionState(NativeLifecycleState::FAILED);
         wrapper->closeInternal();
         return 0;
     }
+    wrapper->transitionState(NativeLifecycleState::STARTED);
     wrapper->rawStream_.store(wrapper->stream.get(), std::memory_order_release);
 
     LOGI("Oboe stream open: api=%s sharing=%s gen=%llu dev=%d rate=%d->%d ch=%d",
@@ -1152,6 +1293,54 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_updatePeqBand(
 }
 
 JNIEXPORT void JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_setPeqBands(
+    JNIEnv *env, jobject thiz, jlong handle,
+    jintArray types, jdoubleArray freqs, jdoubleArray qs, jdoubleArray gains) {
+    auto w = getStream(handle);
+    if (!w) return;
+    if (!types || !freqs || !qs || !gains) {
+        w->dsp.clearPeqBands();
+        return;
+    }
+    const jsize count = env->GetArrayLength(types);
+    if (count == 0 ||
+        env->GetArrayLength(freqs) != count ||
+        env->GetArrayLength(qs) != count ||
+        env->GetArrayLength(gains) != count) {
+        w->dsp.clearPeqBands();
+        return;
+    }
+
+    std::vector<antigravity::PeqBandParams> bands;
+    const size_t limit = std::min(static_cast<size_t>(count), static_cast<size_t>(32));
+    bands.reserve(limit);
+
+    jint *t = env->GetIntArrayElements(types, nullptr);
+    jdouble *f = env->GetDoubleArrayElements(freqs, nullptr);
+    jdouble *q = env->GetDoubleArrayElements(qs, nullptr);
+    jdouble *g = env->GetDoubleArrayElements(gains, nullptr);
+
+    if (t && f && q && g) {
+        for (size_t i = 0; i < limit; ++i) {
+            antigravity::PeqBandParams band;
+            band.type = static_cast<antigravity::FilterType>(t[i]);
+            band.frequency = f[i];
+            band.q = q[i];
+            band.gainDb = g[i];
+            band.enabled = true;
+            bands.push_back(band);
+        }
+    }
+
+    if (t) env->ReleaseIntArrayElements(types, t, JNI_ABORT);
+    if (f) env->ReleaseDoubleArrayElements(freqs, f, JNI_ABORT);
+    if (q) env->ReleaseDoubleArrayElements(qs, q, JNI_ABORT);
+    if (g) env->ReleaseDoubleArrayElements(gains, g, JNI_ABORT);
+
+    w->dsp.setPeqBandsBatch(bands);
+}
+
+JNIEXPORT void JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_setResamplerQuality(
     JNIEnv *env, jobject thiz, jlong handle, jint quality) {
     auto w = getStream(handle);
@@ -1322,13 +1511,14 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
             s->getSharingMode() == oboe::SharingMode::Exclusive ? "EXCLUSIVE" : "SHARED");
         jstring performance = env->NewStringUTF(oboe::convertToText(s->getPerformanceMode()));
         jstring formatStr = env->NewStringUTF(oboe::convertToText(s->getFormat()));
-        jstring stateStr = env->NewStringUTF(oboe::convertToText(s->getState()));
+        const auto lifecycleState = wrapper->lifecycleState_.load(std::memory_order_acquire);
+        jstring stateStr = env->NewStringUTF(nativeLifecycleStateToString(lifecycleState));
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             return nullptr;
         }
 
-        const bool started = (s->getState() == oboe::StreamState::Started);
+        const bool started = (lifecycleState == NativeLifecycleState::STARTED);
         int32_t xruns = 0;
         if (auto xrunResult = s->getXRunCount()) xruns = xrunResult.value();
 
@@ -1343,7 +1533,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
         const int32_t apiId = static_cast<int32_t>(s->getAudioApi());
         const int32_t sharingModeId = (s->getSharingMode() == oboe::SharingMode::Exclusive) ? 1 : 0;
         const int32_t performanceModeId = static_cast<int32_t>(s->getPerformanceMode());
-        const int32_t stateId = static_cast<int32_t>(s->getState());
+        const int32_t stateId = static_cast<int32_t>(lifecycleState);
         const int32_t channelMask = static_cast<int32_t>(s->getChannelMask());
         const jlong streamGen = static_cast<jlong>(wrapper->generationId);
 

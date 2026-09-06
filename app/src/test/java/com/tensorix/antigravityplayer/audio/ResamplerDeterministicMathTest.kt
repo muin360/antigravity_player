@@ -27,12 +27,14 @@ class ResamplerDeterministicMathTest {
     private val mandatoryPairs = listOf(
         RatePair(44100, 48000),
         RatePair(48000, 44100),
-        RatePair(48000, 96000),
-        RatePair(96000, 48000),
+        RatePair(48000, 88200),
+        RatePair(88200, 48000),
         RatePair(44100, 96000),
         RatePair(96000, 44100),
-        RatePair(192000, 48000),
-        RatePair(48000, 192000)
+        RatePair(88200, 96000),
+        RatePair(96000, 88200),
+        RatePair(176400, 48000),
+        RatePair(192000, 48000)
     )
 
     @Test

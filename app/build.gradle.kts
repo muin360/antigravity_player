@@ -23,19 +23,27 @@ android {
         create("release") {
             val props = project.properties
             val env = System.getenv()
-            storeFile = file(
-                props["ANTIGRAVITY_RELEASE_STORE_FILE"] as? String
-                    ?: env["ANTIGRAVITY_RELEASE_STORE_FILE"]
-                    ?: "release.keystore"
-            )
+            val keystorePath = (props["ANTIGRAVITY_RELEASE_STORE_FILE"] as? String)
+                ?: env["ANTIGRAVITY_RELEASE_STORE_FILE"]
+                ?: (props["RELEASE_KEYSTORE_PATH"] as? String)
+                ?: env["RELEASE_KEYSTORE_PATH"]
+            if (!keystorePath.isNullOrBlank()) {
+                storeFile = file(keystorePath)
+            }
             storePassword = (props["ANTIGRAVITY_RELEASE_STORE_PASSWORD"] as? String)
                 ?: env["ANTIGRAVITY_RELEASE_STORE_PASSWORD"]
+                ?: (props["RELEASE_KEYSTORE_PASSWORD"] as? String)
+                ?: env["RELEASE_KEYSTORE_PASSWORD"]
                 ?: ""
             keyAlias = (props["ANTIGRAVITY_RELEASE_KEY_ALIAS"] as? String)
                 ?: env["ANTIGRAVITY_RELEASE_KEY_ALIAS"]
+                ?: (props["RELEASE_KEY_ALIAS"] as? String)
+                ?: env["RELEASE_KEY_ALIAS"]
                 ?: ""
             keyPassword = (props["ANTIGRAVITY_RELEASE_KEY_PASSWORD"] as? String)
                 ?: env["ANTIGRAVITY_RELEASE_KEY_PASSWORD"]
+                ?: (props["RELEASE_KEY_PASSWORD"] as? String)
+                ?: env["RELEASE_KEY_PASSWORD"]
                 ?: ""
         }
     }
@@ -81,13 +89,6 @@ android {
     }
     buildTypes {
         release {
-            val releaseKeystore = signingConfigs.getByName("release").storeFile
-            if (releaseKeystore?.exists() != true) {
-                throw GradleException(
-                    "Production release signing failed-closed: missing release keystore at '${releaseKeystore?.absolutePath}'. " +
-                    "Release builds must never fall back to debug credentials."
-                )
-            }
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true

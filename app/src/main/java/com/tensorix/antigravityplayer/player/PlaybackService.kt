@@ -82,7 +82,7 @@ class PlaybackService : MediaSessionService() {
         val hiFiSupportedState: StateFlow<Boolean> = _hiFiSupportedState.asStateFlow()
 
         fun isHiFiSupported(): Boolean {
-            return _hiFiSupportedState.value || OboeBridge.isAvailable
+            return _hiFiSupportedState.value
         }
 
         fun updateHiFiSupported(supported: Boolean) {

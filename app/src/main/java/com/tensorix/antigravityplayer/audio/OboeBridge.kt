@@ -90,6 +90,13 @@ object OboeBridge {
     external fun clearPeqBands(handle: Long)
     external fun addPeqBand(handle: Long, type: Int, frequency: Double, q: Double, gainDb: Double)
     external fun updatePeqBand(handle: Long, index: Int, type: Int, frequency: Double, q: Double, gainDb: Double)
+    external fun setPeqBands(
+        handle: Long,
+        types: IntArray,
+        frequencies: DoubleArray,
+        qs: DoubleArray,
+        gainsDb: DoubleArray
+    )
     external fun setResamplerQuality(handle: Long, quality: Int)
 
     // Real-Time Telemetry
@@ -101,6 +108,36 @@ object OboeBridge {
     external fun getOutputFramesProduced(handle: Long): Long
     external fun getHardwareFramesWritten(handle: Long): Long
     external fun getStagedPendingFrames(handle: Long): Long
+
+    // Explicit 11-State Native Stream Lifecycle (P0 Subsystem 5)
+    object LifecycleStateId {
+        const val UNINITIALIZED = 0
+        const val OPENING = 1
+        const val OPEN = 2
+        const val STARTING = 3
+        const val STARTED = 4
+        const val PAUSED = 5
+        const val FLUSHING = 6
+        const val STOPPING = 7
+        const val CLOSING = 8
+        const val CLOSED = 9
+        const val FAILED = 10
+
+        fun toName(stateId: Int): String = when (stateId) {
+            UNINITIALIZED -> "UNINITIALIZED"
+            OPENING -> "OPENING"
+            OPEN -> "OPEN"
+            STARTING -> "STARTING"
+            STARTED -> "STARTED"
+            PAUSED -> "PAUSED"
+            FLUSHING -> "FLUSHING"
+            STOPPING -> "STOPPING"
+            CLOSING -> "CLOSING"
+            CLOSED -> "CLOSED"
+            FAILED -> "FAILED"
+            else -> "UNKNOWN"
+        }
+    }
 
     // Structured IDs (Rule 11)
     object AudioApiId {
