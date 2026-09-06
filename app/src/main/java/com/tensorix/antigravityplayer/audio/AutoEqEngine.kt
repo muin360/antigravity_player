@@ -66,7 +66,7 @@ class AutoEqEngine(private val context: Context) {
                 }
                 Log.i(TAG, "✓ Applied ${profile.bands.size} PEQ bands to Native C++ DSP")
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to apply PEQ bands to Oboe: ${e.message}")
+                Log.w(TAG, "Failed to apply PEQ bands to Oboe", e)
             }
         }
 
@@ -89,7 +89,7 @@ class AutoEqEngine(private val context: Context) {
                 OboeBridge.clearPeqBands(handle)
                 Log.i(TAG, "✓ Cleared Native C++ PEQ bands")
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to clear PEQ bands: ${e.message}")
+                Log.w(TAG, "Failed to clear PEQ bands", e)
             }
         }
         equalizerEngine?.setPreAmpGain(0.0f)

@@ -331,7 +331,7 @@ object HardwareHiFiVerifier {
                 }
             }
         } catch (e: Exception) {
-            Log.w("AntigravityAudioAudit", "[PROBE] Method C error: ${e.message}")
+            Log.w("AntigravityAudioAudit", "[PROBE] Method C error", e)
         }
 
         return false
