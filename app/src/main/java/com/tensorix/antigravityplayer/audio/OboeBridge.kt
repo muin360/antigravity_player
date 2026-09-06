@@ -20,7 +20,14 @@ object OboeBridge {
     }
 
     // Core Stream Lifecycle
-    external fun openStream(sampleRate: Int, channelCount: Int, bitPerfectMode: Boolean, deviceId: Int = 0): Long
+    external fun openStream(
+        sampleRate: Int,
+        channelCount: Int,
+        bitPerfectMode: Boolean,
+        deviceId: Int = 0,
+        usage: Int = 1,
+        contentType: Int = 2
+    ): Long
     external fun getStreamGeneration(handle: Long): Long
     external fun getStreamEpoch(handle: Long): Long
     external fun writeDirect(
@@ -89,13 +96,6 @@ object OboeBridge {
     external fun getPeakL(handle: Long): Double
     external fun getPeakR(handle: Long): Double
     external fun getPhaseCorrelation(handle: Long): Float
-
-    /**
-     * Frame-domain telemetry in RESAMPLED-OUTPUT frames (P0-2):
-     * [0] outputFramesProduced, [1] hardwareFramesWritten, [2] stagedPending.
-     * Null when the handle is stale/closed.
-     */
-    external fun getStreamFrameTelemetry(handle: Long): LongArray?
 
     // Zero-allocation scalar telemetry for the real-time audio thread
     external fun getOutputFramesProduced(handle: Long): Long

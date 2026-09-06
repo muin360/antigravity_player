@@ -549,6 +549,21 @@ class OboeAudioSink(
                 return false
             } else {
                 partialFrameBuffer.clear()
+                if (stitchedResult == RET_ERROR_UNSUPPORTED_ENCODING || stitchedResult == RET_ERROR_BAD_ARGUMENTS) {
+                    Log.w(TAG_LOG, "FALLBACK: format unsupported natively (enc=$pcmEncoding ch=$channelCount)")
+                    synchronized(lifecycleLock) { closeOboeStreamLocked() }
+                    nativeUnsupported = true
+                    val fallback = getOrCreateFallbackSink()
+                    lastInputFormat?.let { fmt ->
+                        fallback?.configure(fmt, lastSpecifiedBufferSize, lastOutputChannels)
+                    }
+                    return fallback?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+                } else {
+                    runCatching { Log.w(TAG_LOG, "RECOVERY_REQUEST: stitched write error $stitchedResult") }
+                    synchronized(lifecycleLock) { closeOboeStreamLocked() }
+                    AudioEngine.handleStreamError(stitchedResult, context)
+                    return false
+                }
             }
         }
 
@@ -697,20 +712,37 @@ class OboeAudioSink(
     }
 
     override fun getPlaybackParameters(): PlaybackParameters {
-        return fallbackSink?.playbackParameters ?: playbackParameters
+        // Native Oboe does not implement sonic time/pitch stretching; returning non-1.0x
+        // causes Media3 position calculation drift. When native is active, report DEFAULT.
+        return if (fallbackSink != null) {
+            fallbackSink?.playbackParameters ?: PlaybackParameters.DEFAULT
+        } else {
+            PlaybackParameters.DEFAULT
+        }
     }
 
     override fun setSkipSilenceEnabled(skipSilenceEnabled: Boolean) {
+        this.skipSilenceEnabled = skipSilenceEnabled
         fallbackSink?.setSkipSilenceEnabled(skipSilenceEnabled)
     }
 
     override fun getSkipSilenceEnabled(): Boolean {
-        return fallbackSink?.getSkipSilenceEnabled() ?: false
+        return fallbackSink?.getSkipSilenceEnabled() ?: skipSilenceEnabled
     }
 
     override fun setAudioAttributes(audioAttributes: AudioAttributes) {
+        if (this.audioAttributes == audioAttributes) return
         this.audioAttributes = audioAttributes
         fallbackSink?.setAudioAttributes(audioAttributes)
+        synchronized(lifecycleLock) {
+            if (streamHandle != 0L) {
+                closeOboeStreamLocked()
+                openOboeStreamLocked(preferredDevice?.id ?: 0)
+                if (streamHandle != 0L && isPlaying) {
+                    OboeBridge.startStream(streamHandle)
+                }
+            }
+        }
     }
 
     override fun getAudioAttributes(): AudioAttributes {
@@ -743,15 +775,15 @@ class OboeAudioSink(
     }
 
     override fun setVolume(volume: Float) {
-        // Single volume-ownership model (Phase 14):
-        //  - System stream volume: hardware attenuator (always applies).
-        //  - Native DVC software mirror: owned EXCLUSIVELY by the
-        //    PlaybackService system-volume receiver.
-        //  - Player volume (this callback): applies to the fallback sink's
-        //    AudioTrack only; the native path deliberately ignores it so two
-        //    writers can never fight over the same DVC parameter.
-        this.volume = if (bitPerfectMode) 1.0f else volume
-        fallbackSink?.setVolume(this.volume)
+        val targetVolume = if (bitPerfectMode) 1.0f else volume.coerceIn(0.0f, 1.0f)
+        this.volume = targetVolume
+        fallbackSink?.setVolume(targetVolume)
+        val handle = streamHandle
+        if (handle != 0L && OboeBridge.isAvailable) {
+            val dspVol = dspProcessor?.dvcVolume ?: 1.0
+            val effVol = if (bitPerfectMode) 1.0 else (targetVolume.toDouble() * dspVol).coerceIn(0.0, 1.0)
+            OboeBridge.setDvcVolume(handle, effVol)
+        }
     }
 
     /**
@@ -865,8 +897,21 @@ class OboeAudioSink(
         val targetDevice = if (deviceId > 0) deviceId else (preferredDevice?.id ?: 0)
         // Sample-Rate Matching (now LIVE): OFF pins device stream to 48 kHz.
         val openRate = if (sampleRateMatchingEnabled) sampleRate else 48000
-        val handle = OboeBridge.openStream(openRate, channelCount, bitPerfectMode, targetDevice)
+        val handle = OboeBridge.openStream(
+            sampleRate = openRate,
+            channelCount = channelCount,
+            bitPerfectMode = bitPerfectMode,
+            deviceId = targetDevice,
+            usage = audioAttributes.usage,
+            contentType = audioAttributes.contentType
+        )
         if (handle == 0L) return
+
+        if (OboeBridge.isAvailable) {
+            val dspVol = dspProcessor?.dvcVolume ?: 1.0
+            val effVol = if (bitPerfectMode) 1.0 else (this.volume.toDouble() * dspVol).coerceIn(0.0, 1.0)
+            OboeBridge.setDvcVolume(handle, effVol)
+        }
 
         streamHandle = handle
         streamGeneration = OboeBridge.getStreamGeneration(handle)

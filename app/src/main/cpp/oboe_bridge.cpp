@@ -75,7 +75,6 @@ public:
     std::shared_ptr<oboe::AudioStream> stream = nullptr;
     antigravity::AudiophileDsp dsp;
     antigravity::AudiophileResampler resampler;
-    antigravity::DsdEngine dsd;
 
     int32_t configuredSampleRate = 48000;
     int32_t configuredChannelCount = 2;
@@ -567,7 +566,7 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     JNIEnv *env, jobject thiz, jint sampleRate, jint channelCount,
-    jboolean bitPerfectMode, jint deviceId) {
+    jboolean bitPerfectMode, jint deviceId, jint usage, jint contentType) {
 
     // Rule 4: Step 1 - Validate input format
     if (sampleRate <= 0 || channelCount <= 0 || channelCount > 8) {
@@ -591,6 +590,30 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     wrapper->resampler.configure(sampleRate, sampleRate,
                                  channelCount, antigravity::ResampleQuality::SINC_FAST);
 
+    // Map Android AudioAttributes to Oboe Usage and ContentType
+    oboe::Usage oboeUsage = oboe::Usage::Media;
+    switch (usage) {
+        case 1: oboeUsage = oboe::Usage::Media; break;
+        case 2: oboeUsage = oboe::Usage::VoiceCommunication; break;
+        case 4: oboeUsage = oboe::Usage::Alarm; break;
+        case 5: oboeUsage = oboe::Usage::Notification; break;
+        case 6: oboeUsage = oboe::Usage::AssistanceAccessibility; break;
+        case 11: oboeUsage = oboe::Usage::AssistanceNavigationGuidance; break;
+        case 12: oboeUsage = oboe::Usage::AssistanceSonification; break;
+        case 13: oboeUsage = oboe::Usage::Game; break;
+        case 14: oboeUsage = oboe::Usage::Assistant; break;
+        default: oboeUsage = oboe::Usage::Media; break;
+    }
+
+    oboe::ContentType oboeContentType = oboe::ContentType::Music;
+    switch (contentType) {
+        case 1: oboeContentType = oboe::ContentType::Speech; break;
+        case 2: oboeContentType = oboe::ContentType::Music; break;
+        case 3: oboeContentType = oboe::ContentType::Movie; break;
+        case 4: oboeContentType = oboe::ContentType::Sonification; break;
+        default: oboeContentType = oboe::ContentType::Music; break;
+    }
+
     // Rule 4: Step 4 - Create Oboe stream
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output)
@@ -600,8 +623,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
            ->setFormat(oboe::AudioFormat::Float)
            ->setSampleRate(sampleRate)
            ->setChannelCount(channelCount)
-           ->setUsage(oboe::Usage::Media)
-           ->setContentType(oboe::ContentType::Music);
+           ->setUsage(oboeUsage)
+           ->setContentType(oboeContentType);
 
     if (deviceId > 0) {
         builder.setDeviceId(deviceId);

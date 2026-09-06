@@ -13,6 +13,34 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.tanh
 
+data class FallbackDspConfiguration(
+    val isEnabled: Boolean = true,
+    val isBitPerfectBypass: Boolean = false,
+    val isTurboMode: Boolean = true,
+    val preAmpGainDb: Double = 0.0,
+    val bassBoostGainDb: Double = 0.0,
+    val trebleGainDb: Double = 0.0,
+    val harmonicExciterLevel: Double = 0.0,
+    val clarityEnhancerGain: Double = 0.0,
+    val stereoExpansionMultiplier: Double = 1.0,
+    val dvcVolume: Double = 1.0,
+    val replayGainEnabled: Boolean = true,
+    val replayGainMultiplier: Double = 1.0,
+    val ditherStrength: Double = 0.0,
+    val outputBitDepth: Int = 24,
+    val warmSaturationLevel: Double = 0.0,
+    val triodeWarmthLevel: Double = 0.0,
+    val pentodeTapeLevel: Double = 0.0,
+    val crossfeedLevel: Double = 0.0,
+    val limiterEnabled: Boolean = false,
+    val limiterThresholdDb: Double = 0.0,
+    val subBassMonoEnabled: Boolean = false,
+    val channelBalance: Double = 0.0,
+    val invertPhase: Boolean = false,
+    val airPresenceGainDb: Double = 0.0,
+    val bandGainsDb: List<Double> = List(10) { 0.0 }
+)
+
 data class FallbackDspSnapshot(
     val generation: Long = 1L,
     val isEnabled: Boolean = true,
@@ -38,8 +66,8 @@ data class FallbackDspSnapshot(
     val channelBalance: Double = 0.0,
     val invertPhase: Boolean = false,
     val airPresenceGainDb: Double = 0.0,
-    val bandGainsDb: DoubleArray = DoubleArray(10),
-    val biquadsCoeffs: Array<BiquadCoeffs> = Array(10) { BiquadCoeffs() },
+    val bandGainsDb: List<Double> = List(10) { 0.0 },
+    val biquadsCoeffs: List<BiquadCoeffs> = List(10) { BiquadCoeffs() },
     val bassShelfCoeff: BiquadCoeffs = BiquadCoeffs(),
     val trebleShelfCoeff: BiquadCoeffs = BiquadCoeffs(),
     val detailHpfCoeff: BiquadCoeffs = BiquadCoeffs(),
@@ -57,6 +85,7 @@ data class FallbackDspSnapshot(
  *
  * Concurrency Contract:
  *  - Control thread builds an immutable FallbackDspSnapshot under snapshotLock.
+ *  - Supports transactional batch updates (applyConfiguration) to eliminate repetitive coefficient recalculations.
  *  - Audio render thread atomically takes one coherent snapshot per buffer call in queueInput().
  *  - The audio thread updates its local BiquadFilter instances strictly at block boundaries
  *    when the snapshot generation changes, guaranteeing zero torn coefficients.
@@ -68,85 +97,86 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     private val snapshotLock = Any()
     private var publishedGeneration = 1L
     private var appliedGeneration = 0L
+    private var batchDepth = 0
 
     @Volatile
     var isEnabled: Boolean = true
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var isBitPerfectBypass: Boolean = false
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var isTurboMode: Boolean = true
 
     @Volatile
     var preAmpGainDb: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var bassBoostGainDb: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var trebleGainDb: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var harmonicExciterLevel: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var clarityEnhancerGain: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var stereoExpansionMultiplier: Double = 1.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var dvcVolume: Double = 1.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var ditherStrength: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var outputBitDepth: Int = 24
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var warmSaturationLevel: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var triodeWarmthLevel: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var pentodeTapeLevel: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var crossfeedLevel: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var limiterThresholdDb: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var limiterEnabled: Boolean = false
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var replayGainEnabled: Boolean = true
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var replayGainMultiplier: Double = 1.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     fun applyReplayGain(
         trackGainDb: Float,
@@ -172,7 +202,7 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
     @Volatile
     var channelBalance: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var phaseCorrelation: Float = 1.0f
@@ -182,15 +212,15 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
 
     @Volatile
     var invertPhase: Boolean = false
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var airPresenceGainDb: Double = 0.0
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     @Volatile
     var subBassMonoEnabled: Boolean = false
-        set(value) { field = value; rebuildSnapshot() }
+        set(value) { field = value; onParameterChanged() }
 
     val currentSampleRate: Int
         get() = if (inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) inputAudioFormat.sampleRate else 0
@@ -299,74 +329,127 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     private val upsampledPair = DoubleArray(2)
 
     @Volatile
-    var activeSnapshot: FallbackDspSnapshot = buildSnapshotInternal(48000.0)
+    var activeSnapshot: FallbackDspSnapshot = buildSnapshotInternalLocked(48000.0)
         private set
 
-    private fun rebuildSnapshot() {
-        val fs = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate.toDouble() else 44100.0
-        val snap = buildSnapshotInternal(fs)
-        activeSnapshot = snap
+    private fun onParameterChanged() {
+        synchronized(snapshotLock) {
+            if (batchDepth == 0) {
+                rebuildSnapshotLocked()
+            }
+        }
     }
 
-    private fun buildSnapshotInternal(sampleRate: Double): FallbackDspSnapshot {
+    private fun rebuildSnapshotLocked() {
+        val fs = if (inputAudioFormat.sampleRate > 0) inputAudioFormat.sampleRate.toDouble() else 44100.0
+        activeSnapshot = buildSnapshotInternalLocked(fs)
+    }
+
+    fun batchUpdate(block: () -> Unit) {
         synchronized(snapshotLock) {
-            val gen = ++publishedGeneration
-            val gainsCopy = bandGainsDb.copyOf()
-
-            val biquads = Array(10) { i ->
-                BiquadFilter.computePeakingEq(bandCenterFreqs[i], 1.414, gainsCopy[i], sampleRate)
+            batchDepth++
+            try {
+                block()
+            } finally {
+                batchDepth--
+                if (batchDepth == 0) {
+                    rebuildSnapshotLocked()
+                }
             }
-            val bass = BiquadFilter.computeLowShelf(80.0, 0.707, bassBoostGainDb, sampleRate)
-            val treble = BiquadFilter.computeHighShelf(10000.0, 0.707, trebleGainDb, sampleRate)
-            val detail = BiquadFilter.computeHighPass(7500.0, 0.707, sampleRate * 2.0)
-            val clarity = BiquadFilter.computePeakingEq(3200.0, 1.0, clarityEnhancerGain, sampleRate)
-            val crossfeed = BiquadFilter.computeLowPass(700.0, 0.5, sampleRate)
-            val dcRemoval = BiquadFilter.computeHighPass(2.0, 0.707, sampleRate)
-            val dcBlocker = BiquadFilter.computeHighPass(1.0, 0.707, sampleRate)
-            val aaCorner = minOf(20000.0, sampleRate * 0.45)
-            val aa = BiquadFilter.computeLowPass(aaCorner, 0.707, sampleRate)
-            val subBass = BiquadFilter.computeLowPass(80.0, 0.707, sampleRate)
-            val air = BiquadFilter.computeHighShelf(16000.0, 0.5, airPresenceGainDb, sampleRate)
-
-            return FallbackDspSnapshot(
-                generation = gen,
-                isEnabled = isEnabled,
-                isBitPerfectBypass = isBitPerfectBypass,
-                preAmpGainDb = preAmpGainDb,
-                bassBoostGainDb = bassBoostGainDb,
-                trebleGainDb = trebleGainDb,
-                harmonicExciterLevel = harmonicExciterLevel,
-                clarityEnhancerGain = clarityEnhancerGain,
-                stereoExpansionMultiplier = stereoExpansionMultiplier,
-                dvcVolume = dvcVolume,
-                replayGainEnabled = replayGainEnabled,
-                replayGainMultiplier = replayGainMultiplier,
-                ditherStrength = ditherStrength,
-                outputBitDepth = outputBitDepth,
-                warmSaturationLevel = warmSaturationLevel,
-                triodeWarmthLevel = triodeWarmthLevel,
-                pentodeTapeLevel = pentodeTapeLevel,
-                crossfeedLevel = crossfeedLevel,
-                limiterEnabled = limiterEnabled,
-                limiterThresholdDb = limiterThresholdDb,
-                subBassMonoEnabled = subBassMonoEnabled,
-                channelBalance = channelBalance,
-                invertPhase = invertPhase,
-                airPresenceGainDb = airPresenceGainDb,
-                bandGainsDb = gainsCopy,
-                biquadsCoeffs = biquads,
-                bassShelfCoeff = bass,
-                trebleShelfCoeff = treble,
-                detailHpfCoeff = detail,
-                clarityFilterCoeff = clarity,
-                crossfeedLpfCoeff = crossfeed,
-                dcRemovalCoeff = dcRemoval,
-                dcBlockerCoeff = dcBlocker,
-                aaFilterCoeff = aa,
-                subBassFilterCoeff = subBass,
-                airFilterCoeff = air
-            )
         }
+    }
+
+    fun applyConfiguration(config: FallbackDspConfiguration) {
+        synchronized(snapshotLock) {
+            this.isEnabled = config.isEnabled
+            this.isBitPerfectBypass = config.isBitPerfectBypass
+            this.isTurboMode = config.isTurboMode
+            this.preAmpGainDb = config.preAmpGainDb
+            this.bassBoostGainDb = config.bassBoostGainDb
+            this.trebleGainDb = config.trebleGainDb
+            this.harmonicExciterLevel = config.harmonicExciterLevel
+            this.clarityEnhancerGain = config.clarityEnhancerGain
+            this.stereoExpansionMultiplier = config.stereoExpansionMultiplier
+            this.dvcVolume = config.dvcVolume
+            this.replayGainEnabled = config.replayGainEnabled
+            this.replayGainMultiplier = config.replayGainMultiplier
+            this.ditherStrength = config.ditherStrength
+            this.outputBitDepth = config.outputBitDepth
+            this.warmSaturationLevel = config.warmSaturationLevel
+            this.triodeWarmthLevel = config.triodeWarmthLevel
+            this.pentodeTapeLevel = config.pentodeTapeLevel
+            this.crossfeedLevel = config.crossfeedLevel
+            this.limiterEnabled = config.limiterEnabled
+            this.limiterThresholdDb = config.limiterThresholdDb
+            this.subBassMonoEnabled = config.subBassMonoEnabled
+            this.channelBalance = config.channelBalance
+            this.invertPhase = config.invertPhase
+            this.airPresenceGainDb = config.airPresenceGainDb
+            val limit = minOf(10, config.bandGainsDb.size)
+            for (i in 0 until limit) {
+                bandGainsDb[i] = config.bandGainsDb[i]
+            }
+            rebuildSnapshotLocked()
+        }
+    }
+
+    private fun buildSnapshotInternalLocked(sampleRate: Double): FallbackDspSnapshot {
+        val gen = ++publishedGeneration
+        val gainsList = java.util.Collections.unmodifiableList(bandGainsDb.toList())
+
+        val biquads = List(10) { i ->
+            BiquadFilter.computePeakingEq(bandCenterFreqs[i], 1.414, gainsList[i], sampleRate)
+        }
+        val bass = BiquadFilter.computeLowShelf(80.0, 0.707, bassBoostGainDb, sampleRate)
+        val treble = BiquadFilter.computeHighShelf(10000.0, 0.707, trebleGainDb, sampleRate)
+        val detail = BiquadFilter.computeHighPass(7500.0, 0.707, sampleRate * 2.0)
+        val clarity = BiquadFilter.computePeakingEq(3200.0, 1.0, clarityEnhancerGain, sampleRate)
+        val crossfeed = BiquadFilter.computeLowPass(700.0, 0.5, sampleRate)
+        val dcRemoval = BiquadFilter.computeHighPass(2.0, 0.707, sampleRate)
+        val dcBlocker = BiquadFilter.computeHighPass(1.0, 0.707, sampleRate)
+        val aaCorner = minOf(20000.0, sampleRate * 0.45)
+        val aa = BiquadFilter.computeLowPass(aaCorner, 0.707, sampleRate)
+        val subBass = BiquadFilter.computeLowPass(80.0, 0.707, sampleRate)
+        val air = BiquadFilter.computeHighShelf(16000.0, 0.5, airPresenceGainDb, sampleRate)
+
+        return FallbackDspSnapshot(
+            generation = gen,
+            isEnabled = isEnabled,
+            isBitPerfectBypass = isBitPerfectBypass,
+            preAmpGainDb = preAmpGainDb,
+            bassBoostGainDb = bassBoostGainDb,
+            trebleGainDb = trebleGainDb,
+            harmonicExciterLevel = harmonicExciterLevel,
+            clarityEnhancerGain = clarityEnhancerGain,
+            stereoExpansionMultiplier = stereoExpansionMultiplier,
+            dvcVolume = dvcVolume,
+            replayGainEnabled = replayGainEnabled,
+            replayGainMultiplier = replayGainMultiplier,
+            ditherStrength = ditherStrength,
+            outputBitDepth = outputBitDepth,
+            warmSaturationLevel = warmSaturationLevel,
+            triodeWarmthLevel = triodeWarmthLevel,
+            pentodeTapeLevel = pentodeTapeLevel,
+            crossfeedLevel = crossfeedLevel,
+            limiterEnabled = limiterEnabled,
+            limiterThresholdDb = limiterThresholdDb,
+            subBassMonoEnabled = subBassMonoEnabled,
+            channelBalance = channelBalance,
+            invertPhase = invertPhase,
+            airPresenceGainDb = airPresenceGainDb,
+            bandGainsDb = gainsList,
+            biquadsCoeffs = java.util.Collections.unmodifiableList(biquads),
+            bassShelfCoeff = bass,
+            trebleShelfCoeff = treble,
+            detailHpfCoeff = detail,
+            clarityFilterCoeff = clarity,
+            crossfeedLpfCoeff = crossfeed,
+            dcRemovalCoeff = dcRemoval,
+            dcBlockerCoeff = dcBlocker,
+            aaFilterCoeff = aa,
+            subBassFilterCoeff = subBass,
+            airFilterCoeff = air
+        )
     }
 
     override fun onConfigure(inputAudioFormat: AudioFormat): AudioFormat {
@@ -378,7 +461,9 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
             return AudioFormat.NOT_SET
         }
 
-        rebuildSnapshot()
+        synchronized(snapshotLock) {
+            rebuildSnapshotLocked()
+        }
 
         // Always process/output 32-bit Float PCM for maximum dynamic range.
         val outputFormat = AudioFormat(
@@ -397,14 +482,20 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     }
 
     fun setBandGain(bandIndex: Int, gainDb: Double) {
-        if (bandIndex in bandGainsDb.indices) {
-            bandGainsDb[bandIndex] = gainDb
-            rebuildSnapshot()
+        synchronized(snapshotLock) {
+            if (bandIndex in bandGainsDb.indices) {
+                bandGainsDb[bandIndex] = gainDb
+                if (batchDepth == 0) {
+                    rebuildSnapshotLocked()
+                }
+            }
         }
     }
 
     fun updateAllFiltersLive() {
-        rebuildSnapshot()
+        synchronized(snapshotLock) {
+            rebuildSnapshotLocked()
+        }
     }
 
     fun setAirPresenceGain(gainDb: Double) {
@@ -503,6 +594,11 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                         val b2 = inputBuffer.get().toInt() and 0xFF
                         val raw24 = (b2 shl 16) or (b1 shl 8) or b0
                         val s24 = if (raw24 and 0x800000 != 0) raw24 or -0x1000000 else raw24
+                        // Design Rationale: We divide by 8388608.0 (2^23) rather than 8388607.0 (2^23 - 1)
+                        // to ensure a mathematically symmetric linear scale where -8388608 maps exactly to -1.0.
+                        // Positive full-scale (+8388607) maps to 8388607.0 / 8388608.0 = 0.99999988079,
+                        // matching standard IEEE 754 audio converters and ensuring bit-exact integer round-trips
+                        // with round(floatVal * 8388608.0). Verified in PcmPrecisionAndGoldenSignalTest.kt.
                         s24.toDouble() / 8388608.0
                     }
                     C.ENCODING_PCM_32BIT -> inputBuffer.int.toDouble() / 2147483648.0
