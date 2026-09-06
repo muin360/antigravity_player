@@ -235,27 +235,7 @@ class EqualizerEngine(private val context: Context) {
                     false                                                 // 16: channelTransformActive
                 )
 
-                val doubleParams = DoubleArray(27)
-                doubleParams[0] = if (isBypass) 0.0 else _preAmpGainDb.value.toDouble()
-                doubleParams[1] = if (isBypass) 0.0 else (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0
-                doubleParams[2] = if (isBypass) 0.0 else (_trebleStrength.value.toDouble() / 1500.0) * 15.0
-                doubleParams[3] = if (isBypass) 0.0 else if (_isTurboSharpness.value) 0.25 else 0.0
-                doubleParams[4] = if (isBypass) 0.0 else _clarityGain.value.toDouble()
-                doubleParams[5] = if (isBypass) 1.0 else _stereoExpansion.value.toDouble()
-                doubleParams[6] = if (isBypass) 1.0 else (dsp?.dvcVolume ?: 1.0)
-                doubleParams[7] = if (isBypass || !isRgEnabled) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
-                doubleParams[8] = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0)
-                doubleParams[9] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
-                doubleParams[10] = if (isBypass) 0.0 else _triodeWarmth.value.toDouble()
-                doubleParams[11] = if (isBypass) 0.0 else _pentodeTape.value.toDouble()
-                doubleParams[12] = if (isBypass) 0.0 else _crossfeedLevel.value.toDouble()
-                doubleParams[13] = if (isBypass) 0.0 else _limiterThreshold.value.toDouble()
-                doubleParams[14] = if (isBypass) 0.0 else _channelBalance.value.toDouble()
-                doubleParams[15] = if (isBypass) 0.0 else _airPresence.value.toDouble()
-                doubleParams[16] = if (isBypass) 0.5 else _hrtfRoomSize.value.toDouble()
-                for (i in 0 until 10) {
-                    doubleParams[17 + i] = eqBands[i]
-                }
+                val doubleParams = buildNativeDspDoubleParameters(isBypass, isRgEnabled, dsp, eqBands)
 
                 com.tensorix.antigravityplayer.audio.OboeBridge.setDspParametersBatch(
                     handle = handle,
@@ -287,36 +267,81 @@ class EqualizerEngine(private val context: Context) {
                     }
                 }
             } catch (e: Exception) {
-                Log.w("EqualizerEngine", "Native DSP sync notice: ${e.message}")
+                Log.w("EqualizerEngine", "Native DSP sync notice", e)
             }
         }
+    }
+
+    internal fun buildNativeDspDoubleParameters(
+        isBypass: Boolean,
+        isRgEnabled: Boolean,
+        dsp: Audiophile64BitDspProcessor?,
+        eqBands: DoubleArray
+    ): DoubleArray {
+        val doubleParams = DoubleArray(NATIVE_DSP_PARAM_COUNT) { 0.0 }
+        doubleParams[0] = if (isBypass) 0.0 else _preAmpGainDb.value.toDouble()
+        doubleParams[1] = if (isBypass) 0.0 else (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0
+        doubleParams[2] = if (isBypass) 0.0 else (_trebleStrength.value.toDouble() / 1500.0) * 15.0
+        doubleParams[3] = if (isBypass) 0.0 else if (_isTurboSharpness.value) 0.25 else 0.0
+        doubleParams[4] = if (isBypass) 0.0 else _clarityGain.value.toDouble()
+        doubleParams[5] = if (isBypass) 1.0 else _stereoExpansion.value.toDouble()
+        doubleParams[6] = if (isBypass) 1.0 else (dsp?.dvcVolume ?: 1.0)
+        doubleParams[7] = if (isBypass || !isRgEnabled) 1.0 else (dsp?.replayGainMultiplier ?: 1.0)
+        doubleParams[8] = if (isBypass) 0.0 else (dsp?.ditherStrength ?: 0.0)
+        doubleParams[9] = if (isBypass) 0.0 else _warmSaturation.value.toDouble()
+        doubleParams[10] = if (isBypass) 0.0 else _triodeWarmth.value.toDouble()
+        doubleParams[11] = if (isBypass) 0.0 else _pentodeTape.value.toDouble()
+        doubleParams[12] = if (isBypass) 0.0 else _crossfeedLevel.value.toDouble()
+        doubleParams[13] = if (isBypass) 0.0 else _limiterThreshold.value.toDouble()
+        doubleParams[14] = if (isBypass) 0.0 else _channelBalance.value.toDouble()
+        doubleParams[15] = if (isBypass) 0.0 else _airPresence.value.toDouble()
+        doubleParams[16] = if (isBypass) 0.5 else _hrtfRoomSize.value.toDouble()
+        for (i in 0 until 10) {
+            doubleParams[17 + i] = if (isBypass) 0.0 else (eqBands.getOrNull(i) ?: 0.0)
+        }
+        return doubleParams
+    }
+
+    companion object {
+        const val NATIVE_DSP_PARAM_COUNT = 27
     }
 
     private fun syncWithDsp() {
         val dsp = dspProcessor
         if (dsp != null) {
-            dsp.isEnabled = _isEnabled.value
-            dsp.isBitPerfectBypass = _isBitPerfectBypass.value
-            dsp.isTurboMode = _isTurboSharpness.value
-            dsp.harmonicExciterLevel = if (_isTurboSharpness.value) 0.25 else 0.0
-            dsp.stereoExpansionMultiplier = _stereoExpansion.value.toDouble()
-            dsp.limiterThresholdDb = _limiterThreshold.value.toDouble()
-            dsp.clarityEnhancerGain = _clarityGain.value.toDouble()
-            dsp.warmSaturationLevel = _warmSaturation.value.toDouble()
-            dsp.triodeWarmthLevel = _triodeWarmth.value.toDouble()
-            dsp.pentodeTapeLevel = _pentodeTape.value.toDouble()
-            dsp.airPresenceGainDb = _airPresence.value.toDouble()
-            dsp.crossfeedLevel = _crossfeedLevel.value.toDouble()
-            dsp.channelBalance = _channelBalance.value.toDouble()
-            dsp.invertPhase = _invertPhase.value
-            dsp.replayGainEnabled = _replayGainEnabled.value
-            dsp.preAmpGainDb = _preAmpGainDb.value.toDouble()
-            dsp.bassBoostGainDb = (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0 // Map 0-1000 to 0-15dB
-            dsp.trebleGainDb = (_trebleStrength.value.toDouble() / 1500.0) * 15.0 // Map 0-1500 to 0-15dB
-            
-            _bandLevels.value.forEachIndexed { index, level ->
-                dsp.setBandGain(index, level.toDouble() / 100.0) // mB to dB
+            val isBypass = _isBitPerfectBypass.value
+            val isEnabled = _isEnabled.value
+            val gains = List(10) { idx ->
+                if (isBypass) 0.0 else (_bandLevels.value.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
             }
+            val config = com.tensorix.antigravityplayer.audio.FallbackDspConfiguration(
+                isEnabled = isEnabled,
+                isBitPerfectBypass = isBypass,
+                isTurboMode = _isTurboSharpness.value,
+                preAmpGainDb = if (isBypass) 0.0 else _preAmpGainDb.value.toDouble(),
+                bassBoostGainDb = if (isBypass) 0.0 else (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0,
+                trebleGainDb = if (isBypass) 0.0 else (_trebleStrength.value.toDouble() / 1500.0) * 15.0,
+                harmonicExciterLevel = if (isBypass) 0.0 else if (_isTurboSharpness.value) 0.25 else 0.0,
+                clarityEnhancerGain = if (isBypass) 0.0 else _clarityGain.value.toDouble(),
+                stereoExpansionMultiplier = if (isBypass) 1.0 else _stereoExpansion.value.toDouble(),
+                dvcVolume = if (isBypass) 1.0 else dsp.dvcVolume,
+                replayGainEnabled = _replayGainEnabled.value,
+                replayGainMultiplier = if (isBypass || !_replayGainEnabled.value) 1.0 else dsp.replayGainMultiplier,
+                ditherStrength = if (isBypass) 0.0 else dsp.ditherStrength,
+                outputBitDepth = dsp.outputBitDepth,
+                warmSaturationLevel = if (isBypass) 0.0 else _warmSaturation.value.toDouble(),
+                triodeWarmthLevel = if (isBypass) 0.0 else _triodeWarmth.value.toDouble(),
+                pentodeTapeLevel = if (isBypass) 0.0 else _pentodeTape.value.toDouble(),
+                crossfeedLevel = if (isBypass) 0.0 else _crossfeedLevel.value.toDouble(),
+                limiterEnabled = !isBypass && dsp.limiterEnabled,
+                limiterThresholdDb = if (isBypass) 0.0 else _limiterThreshold.value.toDouble(),
+                subBassMonoEnabled = !isBypass && _subBassMono.value,
+                channelBalance = if (isBypass) 0.0 else _channelBalance.value.toDouble(),
+                invertPhase = !isBypass && _invertPhase.value,
+                airPresenceGainDb = if (isBypass) 0.0 else _airPresence.value.toDouble(),
+                bandGainsDb = gains
+            )
+            dsp.applyConfiguration(config)
         }
         syncWithNativeDsp()
     }
