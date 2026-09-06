@@ -215,13 +215,15 @@ class PlaybackService : MediaSessionService() {
                     val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                     val dvcVol = (currentVolume.toDouble() / maxVolume.toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
-                    dspProcessor.dvcVolume = dvcVol
+                    dspProcessor?.dvcVolume = dvcVol
 
                     if (Math.abs(dvcVol - lastSentDvc) > 0.001) {
                         lastSentDvc = dvcVol
                         val handle = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentActiveHandle
                         if (handle != 0L && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
-                            com.tensorix.antigravityplayer.audio.OboeBridge.setDvcVolume(handle, dvcVol)
+                            serviceScope.launch(Dispatchers.IO) {
+                                com.tensorix.antigravityplayer.audio.OboeBridge.setDvcVolume(handle, dvcVol)
+                            }
                         }
                     }
                 }
@@ -314,7 +316,7 @@ class PlaybackService : MediaSessionService() {
                             activeOboeAudioSink = sink
                             return sink
                         } catch (e: Exception) {
-                            Log.e("AntigravityAudioAudit", "OboeAudioSink initialization failed, falling back to Default: ${e.message}")
+                            Log.e("AntigravityAudioAudit", "OboeAudioSink initialization failed, falling back to Default", e)
                         }
                     }
 
@@ -371,7 +373,7 @@ class PlaybackService : MediaSessionService() {
                     }
                     return sink
                 } catch (e: Exception) {
-                    Log.e("AntigravityAudioAudit", "Hi-Fi Sink Build Failed, falling back to standard: ${e.message}")
+                    Log.e("AntigravityAudioAudit", "Hi-Fi Sink Build Failed, falling back to standard", e)
                     DefaultAudioSink.Builder(context).build()
                 }
             }
@@ -608,23 +610,6 @@ class PlaybackService : MediaSessionService() {
         _bitPerfectMode.value = enabled
         audioPrefs.edit().putBoolean("bit_perfect_mode", enabled).apply()
         Log.i("HiFiPlayer", "Bit-Perfect Mode changed: $enabled")
-        dspProcessor.isBitPerfectBypass = enabled
-        dspProcessor.isEnabled = !enabled
-        if (enabled) {
-            dspProcessor.dvcVolume = 1.0
-            dspProcessor.preAmpGainDb = 0.0
-            dspProcessor.replayGainMultiplier = 1.0
-            dspProcessor.ditherStrength = 0.0
-            dspProcessor.channelBalance = 0.0
-            dspProcessor.limiterEnabled = false
-            dspProcessor.crossfeedLevel = 0.0
-            dspProcessor.airPresenceGainDb = 0.0
-            dspProcessor.clarityEnhancerGain = 0.0
-            dspProcessor.warmSaturationLevel = 0.0
-            dspProcessor.triodeWarmthLevel = 0.0
-            dspProcessor.pentodeTapeLevel = 0.0
-            dspProcessor.harmonicExciterLevel = 0.0
-        }
         equalizerEngine?.setBitPerfectBypass(enabled)
         activeOboeAudioSink?.setBitPerfectMode(enabled)
         AudioEngine.setBitPerfectMode(enabled)
