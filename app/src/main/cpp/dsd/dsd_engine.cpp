@@ -63,24 +63,31 @@ int32_t DsdEngine::convertDsdToDoP(
     // DoP Standard: 16-bit DSD payload wrapped in 24-bit PCM word (shifted to MSB in 32-bit int)
     // Frame format: [Marker (8-bit) | DSD payload (16-bit) | 0x00 (8-bit)]
     // Marker alternates between 0x05 and 0xFA for each sample frame (both channels share frame marker)
+    // Handle odd numBytes defensively by dropping the trailing byte
+    if (numBytes % 2 != 0) {
+        numBytes -= 1;
+    }
+
     int32_t words16 = numBytes / 2;
-    dopOutFrames.resize(words16 * 2); // Stereo
+    dopOutFrames.clear();
+    dopOutFrames.reserve(static_cast<size_t>(words16 * 2)); // Stereo
 
     for (int32_t i = 0; i < words16; ++i) {
         uint16_t sampleL = (static_cast<uint16_t>(dsdBytesL[i * 2]) << 8) | dsdBytesL[i * 2 + 1];
         uint16_t sampleR = (static_cast<uint16_t>(dsdBytesR[i * 2]) << 8) | dsdBytesR[i * 2 + 1];
 
         uint8_t marker = dopMarker_;
-        dopMarker_ = (dopMarker_ == 0x05) ? 0xFA : 0x05; // Toggle marker per stereo frame
-
         int32_t dopWordL = (static_cast<int32_t>(marker) << 24) | (static_cast<int32_t>(sampleL) << 8);
         int32_t dopWordR = (static_cast<int32_t>(marker) << 24) | (static_cast<int32_t>(sampleR) << 8);
 
-        dopOutFrames[i * 2] = dopWordL;
-        dopOutFrames[i * 2 + 1] = dopWordR;
+        dopOutFrames.push_back(dopWordL);
+        dopOutFrames.push_back(dopWordR);
+
+        // Toggle marker once per stereo frame (after writing both L and R)
+        dopMarker_ = (dopMarker_ == 0x05) ? 0xFA : 0x05;
     }
 
-    return words16;
+    return words16; // Number of stereo frames produced
 }
 
 int32_t DsdEngine::decimateDsdToPcm(
