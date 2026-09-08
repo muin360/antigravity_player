@@ -61,6 +61,11 @@ public:
     void setAllPass(double frequency, double q, double sampleRate);
 
     inline double process(double in) {
+        if (!std::isfinite(in)) {
+            z1_ = 0.0;
+            z2_ = 0.0;
+            return 0.0;
+        }
         // Direct Form II Transposed:
         // y[n] = b0*x[n] + z1[n-1]
         // z1[n] = b1*x[n] - a1*y[n] + z2[n-1]
@@ -69,9 +74,10 @@ public:
         z1_ = b1_ * in - a1_ * out + z2_;
         z2_ = b2_ * in - a2_ * out;
 
-        // Subnormal / denormal float flushing to prevent CPU pipeline stalls
-        if (std::abs(z1_) < 1.0e-20) z1_ = 0.0;
-        if (std::abs(z2_) < 1.0e-20) z2_ = 0.0;
+        // Subnormal / denormal float and non-finite flushing to prevent CPU stalls and NaN contamination
+        if (std::abs(z1_) < 1.0e-20 || !std::isfinite(z1_)) z1_ = 0.0;
+        if (std::abs(z2_) < 1.0e-20 || !std::isfinite(z2_)) z2_ = 0.0;
+        if (!std::isfinite(out)) out = 0.0;
 
         return out;
     }

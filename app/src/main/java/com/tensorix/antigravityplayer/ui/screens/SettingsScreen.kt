@@ -179,12 +179,25 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text("Audiophile Hi-Fi Sink", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text("32-bit Float + 64-bit Double DSP", color = TextSecondary, fontSize = 11.sp)
+                                val subtitle = if (!isHiFiSupported) {
+                                    "Hardware lacks Direct PCM HAL support"
+                                } else {
+                                    val route = audioSnapshot.output.activeRoute
+                                    if (route == null) {
+                                        "Audio output disconnected — Hi-Fi ready for connected routes"
+                                    } else if (route.routeType == com.tensorix.antigravityplayer.audio.AudioOutputRouteType.SPEAKER) {
+                                        "Speaker active (Standard Mixer) — Hi-Fi engages on Headphones/DAC"
+                                    } else {
+                                        "32-bit Float + 64-bit Double DSP active"
+                                    }
+                                }
+                                Text(subtitle, color = TextSecondary, fontSize = 11.sp)
                             }
                         }
                         Switch(
                             checked = hiFiEnabled,
                             onCheckedChange = { onHiFiToggle(it) },
+                            enabled = isHiFiSupported,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.Black,
                                 checkedTrackColor = PrimaryCyan,
@@ -215,25 +228,20 @@ fun SettingsScreen(
                     }
                 }
                 
-                if (false) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        "Note: 32-bit Float sink requires Android 8.0+",
-                        color = SecondaryViolet,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Quick Status Badges
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val routeType = audioSnapshot.output.activeRoute?.routeType?.displayName ?: "Internal"
-                    StatusBadge(text = routeType, color = PrimaryCyan)
+                    val route = audioSnapshot.output.activeRoute
+                    val routeType = route?.routeType?.displayName ?: "No Route"
+                    StatusBadge(text = routeType, color = if (route != null) PrimaryCyan else Color.Gray)
                     StatusBadge(text = "${audioSnapshot.output.currentPlaybackBitDepth}-BIT", color = SecondaryViolet)
-                    if (audioSnapshot.output.bitPerfectState == BitPerfectState.VERIFIED || audioSnapshot.output.bitPerfectState == BitPerfectState.ACTIVE_UNVERIFIED) {
+                    if (audioSnapshot.output.bitPerfectState == BitPerfectState.VERIFIED) {
+                        StatusBadge(text = "BIT-PERFECT", color = Color(0xFF00E676))
+                    } else if (audioSnapshot.output.canonicalSnapshot?.directPathActive?.value == true) {
                         StatusBadge(text = "DIRECT HI-RES", color = Color(0xFF00E676))
+                    } else if (route?.routeType == com.tensorix.antigravityplayer.audio.AudioOutputRouteType.SPEAKER) {
+                        StatusBadge(text = "SPEAKER MIXER", color = Color(0xFFFFB74D))
                     } else {
                         StatusBadge(text = "64-BIT DSP", color = PrimaryCyan.copy(alpha = 0.8f))
                     }

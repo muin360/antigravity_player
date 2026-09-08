@@ -70,12 +70,21 @@ object AudioEngine {
         }
     }
 
+    private const val MAX_CONSECUTIVE_RECOVERIES = 5
+    private const val RECOVERY_WINDOW_MS = 5000L
+    private val consecutiveErrors = java.util.concurrent.atomic.AtomicInteger(0)
+    private val lastErrorTimeMs = java.util.concurrent.atomic.AtomicLong(0L)
+    private val recoveryInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun resetForTesting() {
         _snapshot.value = null
         _activeRoute.value = null
         _bitPerfectRequested.value = false
         _bitPerfectState.value = BitPerfectState.DISABLED
         _recoveryState.value = "NORMAL"
+        consecutiveErrors.set(0)
+        lastErrorTimeMs.set(0L)
+        recoveryInProgress.set(false)
     }
 
     fun setBitPerfectMode(enabled: Boolean) {
@@ -129,15 +138,31 @@ object AudioEngine {
 
     /**
      * Single recovery authority for stream errors reported by native layer or AudioSink.
-     * Reentrancy-guarded: concurrent error reports collapse into one recovery pass.
+     * Reentrancy-guarded & bounded: consecutive error storms trip circuit breaker.
+     * Returns true if recovery proceeded, false if skipped or circuit breaker tripped.
      */
-    fun handleStreamError(errorCode: Int, context: Context) {
+    fun handleStreamError(errorCode: Int, context: Context? = null): Boolean {
+        val now = System.currentTimeMillis()
+        val lastTime = lastErrorTimeMs.getAndSet(now)
+        val errors = if (now - lastTime < RECOVERY_WINDOW_MS) {
+            consecutiveErrors.incrementAndGet()
+        } else {
+            consecutiveErrors.set(1)
+            1
+        }
+
+        if (errors > MAX_CONSECUTIVE_RECOVERIES) {
+            runCatching { Log.e("RECOVERY", "reason=STREAM_ERROR_$errorCode consecutiveErrors=$errors result=CIRCUIT_BREAKER_TRIPPED") }
+            _recoveryState.value = "FAILED"
+            return false
+        }
+
         if (!recoveryInProgress.compareAndSet(false, true)) {
             runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode result=SKIPPED_ALREADY_RECOVERING") }
-            return
+            return false
         }
         try {
-            runCatching { Log.w("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=STARTING") }
+            runCatching { Log.w("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=$errors result=STARTING") }
             _recoveryState.value = "RECOVERING"
             invalidate()
 
@@ -146,15 +171,14 @@ object AudioEngine {
             if (sink != null) {
                 val recoveredNative = sink.recoverFromError(errorCode)
                 val resultStr = if (recoveredNative) "RECOVERED_NATIVE" else "RECOVERED_FALLBACK"
-                runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=1 result=$resultStr") }
+                runCatching { Log.i("RECOVERY", "reason=STREAM_ERROR_$errorCode attempt=$errors result=$resultStr") }
             }
 
             service?.refreshAudiophileState()
+            return true
         } finally {
             _recoveryState.value = "NORMAL"
             recoveryInProgress.set(false)
         }
     }
-
-    private val recoveryInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
 }

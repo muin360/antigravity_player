@@ -47,17 +47,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _lyricsLines = MutableStateFlow<List<LrcLine>>(emptyList())
     val lyricsLines: StateFlow<List<LrcLine>> = _lyricsLines.asStateFlow()
 
-    /** Sibling .lrc lookup: "<audio-path-without-ext>.lrc" next to the file. */
+    /** Sibling .lrc lookup: supports both direct paths and MediaStore content:// URIs */
     private fun loadLrcFor(song: Song): List<LrcLine> {
-        val path = song.filePath
-        if (!path.startsWith("/") && !path.startsWith("file:")) return emptyList()
-        return runCatching {
-            val file = if (path.startsWith("file:")) java.io.File(java.net.URI(path)) else java.io.File(path)
-            val lrc = java.io.File(file.parentFile, file.nameWithoutExtension + ".lrc")
-            if (lrc.isFile && lrc.length() in 1..(2L * 1024 * 1024)) {
-                LrcParser.parse(lrc.readText())
-            } else emptyList()
-        }.getOrDefault(emptyList())
+        return com.tensorix.antigravityplayer.util.LyricsResolver.resolveLrc(getApplication(), song)
     }
 
     private val _searchQuery = MutableStateFlow("")
@@ -102,6 +94,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _audioSnapshot = MutableStateFlow(AudiophilePlaybackSnapshot())
     val audioSnapshot: StateFlow<AudiophilePlaybackSnapshot> = _audioSnapshot.asStateFlow()
+
+    val isRouteAvailable: StateFlow<Boolean> = _audioSnapshot.map {
+        it.output.activeRoute != null
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val isDirectPathActive: StateFlow<Boolean> = _audioSnapshot.map {
+        it.output.canonicalSnapshot?.directPathActive?.value == true
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val isDirectOutputVerified: StateFlow<Boolean> = _audioSnapshot.map {
+        it.output.bitPerfectState == com.tensorix.antigravityplayer.audio.BitPerfectState.VERIFIED
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     val hifiActive: StateFlow<Boolean> = _audioSnapshot.map { snapshot ->
         val route = snapshot.output.activeRoute
@@ -217,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val service = PlaybackService.instance
         if (service != null) {
             _audioSnapshot.value = service.audiophileSnapshot.value
-            _hiFiSupported.value = service.audiophileSnapshot.value.output.activeRoute != null
+            _hiFiSupported.value = PlaybackService.isHiFiSupported()
             return
         }
 

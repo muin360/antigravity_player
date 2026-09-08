@@ -241,6 +241,7 @@ fun MainAppScreen(
     val queue by viewModel.queue.collectAsStateWithLifecycle()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
     val hifiActive by viewModel.hifiActive.collectAsStateWithLifecycle()
+    val hiFiSupported by viewModel.hiFiSupported.collectAsStateWithLifecycle()
 
     val lyricsLines by viewModel.lyricsLines.collectAsStateWithLifecycle()
     val audioSnapshot by viewModel.audioSnapshot.collectAsStateWithLifecycle()
@@ -388,6 +389,7 @@ fun MainAppScreen(
                 3 -> SettingsScreen(
                     totalTracksCount = songs.size,
                     isScanning = isScanning,
+                    isHiFiSupported = hiFiSupported,
                     isBitPerfectMode = isBitPerfectMode,
                     isSampleRateMatching = isSampleRateMatching,
                     isAudioAuxEnabled = isAudioAuxEnabled,
@@ -428,7 +430,8 @@ fun MainAppScreen(
             onOpenSleepTimer = { showSleepTimerDialog = true },
             onOpenLyrics = { showLyricsSheet = true },
             onOpenAudiophileInfo = { showAudiophileInfoSheet = true },
-            isHiFiSupported = hifiActive
+            isHiFiSupported = hiFiSupported,
+            isHiFiActive = hifiActive
         )
     }
 

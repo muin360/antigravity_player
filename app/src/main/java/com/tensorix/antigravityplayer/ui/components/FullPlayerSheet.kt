@@ -58,7 +58,8 @@ fun FullPlayerSheet(
     onOpenSleepTimer: () -> Unit,
     onOpenLyrics: () -> Unit = {},
     onOpenAudiophileInfo: () -> Unit = {},
-    isHiFiSupported: Boolean = false
+    isHiFiSupported: Boolean = false,
+    isHiFiActive: Boolean = false
 ) {
     if (song == null) return
 
@@ -107,7 +108,7 @@ fun FullPlayerSheet(
                     color = TextSecondary
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (isHiFiSupported) {
+                    if (isHiFiActive) {
                         Surface(
                             color = PrimaryCyan,
                             shape = RoundedCornerShape(999.dp)
@@ -116,6 +117,20 @@ fun FullPlayerSheet(
                                 text = "Hi-Fi",
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                 color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    } else if (isHiFiSupported) {
+                        Surface(
+                            color = PrimaryCyan.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(999.dp)
+                        ) {
+                            Text(
+                                text = "Hi-Fi Ready",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                color = PrimaryCyan,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp
                             )

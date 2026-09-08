@@ -21,23 +21,23 @@ object VendorDacManager {
 
     @Volatile
     var isLgQuadDacActive: Boolean = false
-        private set
+        internal set
 
     @Volatile
     var isVivoHiFiActive: Boolean = false
-        private set
+        internal set
 
     @Volatile
     var isSamsungUhqActive: Boolean = false
-        private set
+        internal set
 
     @Volatile
     var isSonyHiResActive: Boolean = false
-        private set
+        internal set
 
     @Volatile
     var isQualcommDirectActive: Boolean = false
-        private set
+        internal set
 
     @Volatile
     private var detectedDacNameInternal: String = "Internal Audio HAL"
@@ -193,20 +193,36 @@ object VendorDacManager {
 
         Log.i(TAG, "🚀 [ISOLATED DAC PROBE] Manufacturer: $manufacturer, Brand: $brand, Model: $model")
 
+        // Reset all vendor active states before probing
+        isVivoHiFiActive = false
+        isSamsungUhqActive = false
+        isSonyHiResActive = false
+        isLgQuadDacActive = false
+        isQualcommDirectActive = false
+
+        val isVivoMatch = SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.VIVO)
+        val isSamsungMatch = SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.SAMSUNG)
+        val isSonyMatch = SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.SONY)
+        val isLgMatch = SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.LG)
+        val isQualcommMatch = SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.QUALCOMM)
+
         // Activate matched vendor adapter ONLY
-        when {
-            SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.VIVO) -> VivoAdapter.activate(context)
-            SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.SAMSUNG) -> SamsungAdapter.activate(context)
-            SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.SONY) -> SonyAdapter.activate(context)
-            SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.LG) -> LGAdapter.activate(context)
-            SafeAudioParameterController.isVendorMatch(SafeAudioParameterController.TargetVendor.QUALCOMM) -> QualcommAdapter.activate(context)
+        val adapterActivated = when {
+            isVivoMatch -> VivoAdapter.activate(context)
+            isSamsungMatch -> SamsungAdapter.activate(context)
+            isSonyMatch -> SonyAdapter.activate(context)
+            isLgMatch -> LGAdapter.activate(context)
+            isQualcommMatch -> QualcommAdapter.activate(context)
             else -> GenericAdapter.activate(context)
         }
 
         // Verification phase
         val verifiedReport = HardwareHiFiVerifier.probeHardwareState(context)
-        isVivoHiFiActive = verifiedReport.isVendorHiFiActive
-        isQualcommDirectActive = verifiedReport.isDirectOutputSupported
+        isVivoHiFiActive = isVivoMatch && verifiedReport.isVendorHiFiActive
+        isQualcommDirectActive = isQualcommMatch && verifiedReport.isDirectOutputActive
+        isSamsungUhqActive = isSamsungMatch && adapterActivated
+        isSonyHiResActive = isSonyMatch && adapterActivated
+        isLgQuadDacActive = isLgMatch && adapterActivated
         detectedDacNameInternal = verifiedReport.activeDacName
 
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -215,17 +231,45 @@ object VendorDacManager {
         val isLowLatency = framesPerBuffer <= 256
         val isWired = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.any {
             it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-            it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+            it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+            it.type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE
         } ?: false
 
+        val isExclusiveActive = if (forceExclusive) {
+            if (verifiedReport.isDirectOutputSupported) {
+                prepareHardwareForDirectPlayback(context, sampleRate)
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+
+        val isHiFiConfirmed = isVivoHiFiActive || isSamsungUhqActive || isSonyHiResActive || isLgQuadDacActive || isQualcommDirectActive
+        val confirmedParameter = when {
+            isVivoHiFiActive -> "vivo_hifi_active"
+            isSamsungUhqActive -> "sound_alive_uhq_upscaler"
+            isSonyHiResActive -> "sony_hires_audio_enabled"
+            isLgQuadDacActive -> "quad_dac_state"
+            isQualcommDirectActive -> "direct_pcm"
+            else -> "standard_hal"
+        }
+
         return HiFiActivationResult(
-            isHiFiConfirmed = isVivoHiFiActive,
+            isHiFiConfirmed = isHiFiConfirmed,
             activeOem = manufacturer.uppercase(),
-            confirmedParameter = if (isVivoHiFiActive) "vivo_hifi_active" else "standard_hal",
+            confirmedParameter = confirmedParameter,
             outputSampleRate = sampleRate,
             isLowLatencyPath = isLowLatency,
             isWiredConnected = isWired,
-            isExclusiveModeActive = forceExclusive
+            isExclusiveModeActive = isExclusiveActive,
+            isVivoActive = isVivoHiFiActive,
+            isSamsungActive = isSamsungUhqActive,
+            isSonyActive = isSonyHiResActive,
+            isLgActive = isLgQuadDacActive,
+            isQualcommActive = isQualcommDirectActive
         )
     }
 
@@ -256,6 +300,13 @@ object VendorDacManager {
         VivoAdapter.deactivate(context)
         SamsungAdapter.deactivate(context)
         LGAdapter.deactivate(context)
+        SonyAdapter.deactivate(context)
+        QualcommAdapter.deactivate(context)
+        isVivoHiFiActive = false
+        isSamsungUhqActive = false
+        isSonyHiResActive = false
+        isLgQuadDacActive = false
+        isQualcommDirectActive = false
     }
 
     fun onAudioSessionOpened(context: Context, sessionId: Int) {
@@ -319,5 +370,10 @@ data class HiFiActivationResult(
     val outputSampleRate: Int,
     val isLowLatencyPath: Boolean,
     val isWiredConnected: Boolean,
-    var isExclusiveModeActive: Boolean
+    var isExclusiveModeActive: Boolean,
+    val isVivoActive: Boolean = false,
+    val isSamsungActive: Boolean = false,
+    val isSonyActive: Boolean = false,
+    val isLgActive: Boolean = false,
+    val isQualcommActive: Boolean = false
 )

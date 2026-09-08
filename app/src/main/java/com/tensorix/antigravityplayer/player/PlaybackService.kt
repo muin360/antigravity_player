@@ -78,15 +78,16 @@ class PlaybackService : MediaSessionService() {
             get() = _instanceFlow.value
             private set(value) { _instanceFlow.value = value }
 
-        private val _hiFiSupportedState = MutableStateFlow(false)
-        val hiFiSupportedState: StateFlow<Boolean> = _hiFiSupportedState.asStateFlow()
+        private val _hardwareHiFiCapable = MutableStateFlow(false)
+        val hardwareHiFiCapable: StateFlow<Boolean> = _hardwareHiFiCapable.asStateFlow()
+        val hiFiSupportedState: StateFlow<Boolean> = _hardwareHiFiCapable.asStateFlow()
 
         fun isHiFiSupported(): Boolean {
-            return _hiFiSupportedState.value
+            return _hardwareHiFiCapable.value
         }
 
         fun updateHiFiSupported(supported: Boolean) {
-            _hiFiSupportedState.value = supported
+            _hardwareHiFiCapable.value = supported
         }
     }
 
@@ -123,6 +124,15 @@ class PlaybackService : MediaSessionService() {
     private val _audiophileSnapshot = MutableStateFlow(AudiophilePlaybackSnapshot())
     val audiophileSnapshot: StateFlow<AudiophilePlaybackSnapshot> = _audiophileSnapshot.asStateFlow()
 
+    private val _isRouteAvailable = MutableStateFlow(false)
+    val isRouteAvailable: StateFlow<Boolean> = _isRouteAvailable.asStateFlow()
+
+    private val _isDirectPathActive = MutableStateFlow(false)
+    val isDirectPathActive: StateFlow<Boolean> = _isDirectPathActive.asStateFlow()
+
+    private val _isDirectOutputVerified = MutableStateFlow(false)
+    val isDirectOutputVerified: StateFlow<Boolean> = _isDirectOutputVerified.asStateFlow()
+
     var activeOboeAudioSink: com.tensorix.antigravityplayer.audio.OboeAudioSink? = null
         private set
 
@@ -150,7 +160,7 @@ class PlaybackService : MediaSessionService() {
         autoEqEngine = com.tensorix.antigravityplayer.audio.AutoEqEngine(applicationContext)
 
         val hifiSupported = OboeBridge.isAvailable && HardwareHiFiVerifier.isHiFiCapable(applicationContext)
-        _hiFiSupportedState.value = hifiSupported
+        _hardwareHiFiCapable.value = hifiSupported
 
         // Generate persistent audio session ID to notify Android AudioPolicy / OEM Hi-Fi service
         val generatedSessionId = audioManager.generateAudioSessionId()
@@ -243,7 +253,7 @@ class PlaybackService : MediaSessionService() {
         // Initial volume sync
         val initDvc = (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / 
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
-        dspProcessor.dvcVolume = initDvc
+        equalizerEngine?.setDvcVolume(initDvc)
 
 
 
@@ -509,13 +519,16 @@ class PlaybackService : MediaSessionService() {
         
         _currentTrackInfo.value = info
         val rgEnabled = equalizerEngine?.replayGainEnabled?.value ?: true
-        dspProcessor.replayGainEnabled = rgEnabled
         if (rgEnabled && (trackReplayGainDb != 0f || albumReplayGainDb != 0f || peakAmplitude > 0f)) {
-            dspProcessor.applyReplayGain(trackReplayGainDb, albumReplayGainDb, peakAmplitude, useAlbumGain)
+            val gainDb = if (useAlbumGain) albumReplayGainDb else trackReplayGainDb
+            val linearGain = Math.min(
+                Math.pow(10.0, (gainDb / 20.0).toDouble()),
+                if (peakAmplitude > 0f) (1.0 / peakAmplitude).toDouble() else 10.0
+            )
+            equalizerEngine?.setReplayGainMultiplier(linearGain)
         } else {
-            dspProcessor.replayGainMultiplier = 1.0
+            equalizerEngine?.setReplayGainMultiplier(1.0)
         }
-        equalizerEngine?.syncWithNativeDsp()
         refreshAudiophileState(info)
     }
 
@@ -525,10 +538,10 @@ class PlaybackService : MediaSessionService() {
         val snapshot = outManager.currentSnapshot(trackInfo, isDspActive)
         _audiophileSnapshot.value = snapshot
         val activeRoute = snapshot.output.activeRoute
-        val isHiFiSupported = activeRoute != null &&
-            activeRoute.routeType != com.tensorix.antigravityplayer.audio.AudioOutputRouteType.SPEAKER &&
-            com.tensorix.antigravityplayer.audio.HardwareHiFiVerifier.isHiFiCapable(applicationContext)
-        _hiFiSupportedState.value = isHiFiSupported
+        _isRouteAvailable.value = (activeRoute != null)
+        _isDirectPathActive.value = (snapshot.output.canonicalSnapshot?.directPathActive?.value == true)
+        _isDirectOutputVerified.value = (snapshot.output.bitPerfectState == com.tensorix.antigravityplayer.audio.BitPerfectState.VERIFIED)
+        _hardwareHiFiCapable.value = OboeBridge.isAvailable && HardwareHiFiVerifier.isHiFiCapable(applicationContext)
 
         snapshot.output.canonicalSnapshot?.let { canon ->
             HiFiBadgeState.updateFromSnapshot(canon)
@@ -607,9 +620,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setHiFiEnabled(enabled: Boolean) {
-        _hiFiEnabled.value = enabled && isHiFiSupported()
-        audioPrefs.edit { putBoolean("hi_fi_enabled", _hiFiEnabled.value) }
-        dspProcessor.isTurboMode = _hiFiEnabled.value
+        _hiFiEnabled.value = enabled
+        audioPrefs.edit { putBoolean("hi_fi_enabled", enabled) }
+        dspProcessor.isTurboMode = enabled
         AudioEngine.invalidate()
         refreshAudiophileState()
     }

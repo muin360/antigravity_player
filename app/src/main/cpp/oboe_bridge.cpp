@@ -11,6 +11,10 @@
 #include <cstring>
 #include <cinttypes>
 #include <time.h>
+#include <condition_variable>
+#include <chrono>
+#include <signal.h>
+#include <unistd.h>
 #include "dsp/audiophile_dsp.h"
 #include "resampler/audiophile_resampler.h"
 #include "dsd/dsd_engine.h"
@@ -136,6 +140,100 @@ inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycl
             return to == NativeLifecycleState::OPENING;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Native Engineering-Grade Crash Diagnostics (P0 Subsystem 2)
+// Lock-free circular event buffer & signal crash dumper
+// ---------------------------------------------------------------------------
+struct NativeDiagEvent {
+    int64_t timestampNs;
+    pid_t threadId;
+    const char *stage;
+    jlong handle;
+    uint64_t generation;
+    int32_t state;
+    int32_t extra;
+};
+
+constexpr size_t kMaxDiagEvents = 128;
+std::array<NativeDiagEvent, kMaxDiagEvents> gDiagBuffer{};
+std::atomic<uint64_t> gDiagSequence{0};
+
+inline void recordNativeDiag(const char *stage, jlong handle = 0, uint64_t gen = 0, int32_t state = 0, int32_t extra = 0) {
+    const uint64_t seq = gDiagSequence.fetch_add(1, std::memory_order_relaxed);
+    auto &ev = gDiagBuffer[seq % kMaxDiagEvents];
+    ev.timestampNs = monotonicNowNs();
+    ev.threadId = gettid();
+    ev.stage = stage;
+    ev.handle = handle;
+    ev.generation = gen;
+    ev.state = state;
+    ev.extra = extra;
+}
+
+struct sigaction gOldSigSegv{}, gOldSigBus{}, gOldSigFpe{}, gOldSigIll{}, gOldSigAbrt{};
+
+void nativeCrashSignalHandler(int sig, siginfo_t *info, void *context) {
+    const char *sigName = "UNKNOWN";
+    switch (sig) {
+        case SIGSEGV: sigName = "SIGSEGV"; break;
+        case SIGBUS:  sigName = "SIGBUS"; break;
+        case SIGFPE:  sigName = "SIGFPE"; break;
+        case SIGILL:  sigName = "SIGILL"; break;
+        case SIGABRT: sigName = "SIGABRT"; break;
+    }
+    LOGE("🚨 [FATAL NATIVE SIGNAL CAUGHT] Signal: %s (%d) at fault addr: %p, thread: %d",
+         sigName, sig, info ? info->si_addr : nullptr, gettid());
+
+    const uint64_t curSeq = gDiagSequence.load(std::memory_order_relaxed);
+    const size_t count = std::min<size_t>(curSeq, kMaxDiagEvents);
+    const uint64_t startSeq = (curSeq > count) ? (curSeq - count) : 0;
+    LOGE("--- BEGIN RECENT NATIVE DIAGNOSTIC TRACE (last %zu events) ---", count);
+    for (uint64_t s = startSeq; s < curSeq; ++s) {
+        const auto &ev = gDiagBuffer[s % kMaxDiagEvents];
+        LOGE("[%llu] T+%" PRId64 "ns tid=%d stage=%s handle=%lld gen=%llu state=%d extra=%d",
+             static_cast<unsigned long long>(s),
+             ev.timestampNs, ev.threadId, ev.stage ? ev.stage : "null",
+             static_cast<long long>(ev.handle),
+             static_cast<unsigned long long>(ev.generation),
+             ev.state, ev.extra);
+    }
+    LOGE("--- END RECENT NATIVE DIAGNOSTIC TRACE ---");
+
+    struct sigaction *oldHandler = nullptr;
+    switch (sig) {
+        case SIGSEGV: oldHandler = &gOldSigSegv; break;
+        case SIGBUS:  oldHandler = &gOldSigBus; break;
+        case SIGFPE:  oldHandler = &gOldSigFpe; break;
+        case SIGILL:  oldHandler = &gOldSigIll; break;
+        case SIGABRT: oldHandler = &gOldSigAbrt; break;
+    }
+    if (oldHandler && (oldHandler->sa_flags & SA_SIGINFO) && oldHandler->sa_sigaction) {
+        oldHandler->sa_sigaction(sig, info, context);
+    } else if (oldHandler && oldHandler->sa_handler && oldHandler->sa_handler != SIG_DFL && oldHandler->sa_handler != SIG_IGN) {
+        oldHandler->sa_handler(sig);
+    } else {
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
+
+void installNativeSignalHandler() {
+    static std::atomic<bool> installed{false};
+    if (installed.exchange(true)) return;
+
+    struct sigaction sa{};
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sa.sa_sigaction = nativeCrashSignalHandler;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGSEGV, &sa, &gOldSigSegv);
+    sigaction(SIGBUS, &sa, &gOldSigBus);
+    sigaction(SIGFPE, &sa, &gOldSigFpe);
+    sigaction(SIGILL, &sa, &gOldSigIll);
+    sigaction(SIGABRT, &sa, &gOldSigAbrt);
+    LOGI("Native engineering crash signal handlers installed successfully.");
 }
 
 } // namespace
@@ -301,6 +399,9 @@ public:
     std::mutex lifecycleMutex;
     std::atomic<oboe::AudioStream*> rawStream_{nullptr};
     std::atomic<int32_t> activeWriters_{0};
+    std::mutex quiesceMutex_;
+    std::condition_variable quiesceCv_;
+    std::atomic<bool> quiesceRequested_{false};
 
     // Formally race-safe stream pointer snapshot for control-plane callers:
     std::shared_ptr<oboe::AudioStream> getStreamSnapshot() {
@@ -333,12 +434,16 @@ public:
         if (!isActive.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
+        recordNativeDiag("CLOSE_INTERNAL", 0, generationId, static_cast<int32_t>(NativeLifecycleState::CLOSING));
         transitionState(NativeLifecycleState::CLOSING);
-        // Quiescence wait: wait until any active audio writer has finished writing.
-        // Hot-path writes are bounded by kWriteTimeoutNs (20ms), so this completes in at most a few ms.
-        while (activeWriters_.load(std::memory_order_acquire) > 0) {
-            struct timespec req = {0, 500000L}; // 0.5 ms
-            nanosleep(&req, nullptr);
+        // Quiescence barrier: wait until any in-flight audio writer has finished writing.
+        // Hot-path writes are bounded by kWriteTimeoutNs (20ms), condition variable wakes immediately on writer completion.
+        quiesceRequested_.store(true, std::memory_order_release);
+        if (activeWriters_.load(std::memory_order_acquire) > 0) {
+            std::unique_lock<std::mutex> lk(quiesceMutex_);
+            quiesceCv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
+                return activeWriters_.load(std::memory_order_acquire) == 0;
+            });
         }
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         rawStream_.store(nullptr, std::memory_order_release);
@@ -528,8 +633,17 @@ public:
         LOGW("Oboe stream disconnect/error: %s (gen=%llu)",
              oboe::convertToText(error),
              static_cast<unsigned long long>(generationId));
+        recordNativeDiag("ERROR_AFTER_CLOSE", 0, generationId, static_cast<int32_t>(error));
         transitionState(NativeLifecycleState::FAILED);
         isActive.store(false, std::memory_order_release);
+        // Quiescence barrier: wait for any active audio writer before destroying the stream
+        quiesceRequested_.store(true, std::memory_order_release);
+        if (activeWriters_.load(std::memory_order_acquire) > 0) {
+            std::unique_lock<std::mutex> lk(quiesceMutex_);
+            quiesceCv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
+                return activeWriters_.load(std::memory_order_acquire) == 0;
+            });
+        }
         rawStream_.store(nullptr, std::memory_order_release);
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         if (stream.get() == audioStream) {
@@ -582,7 +696,7 @@ namespace {
     };
 
     inline OboeStreamWrapper* getStreamValidatedLockFree(jlong handle, jlong generation, SlotLease &lease) {
-        if (handle <= 0) return nullptr;
+        if (handle <= 0 || generation <= 0) return nullptr;
         const size_t preferredSlot = static_cast<size_t>(handle) % kMaxRegistrySlots;
         for (size_t offset = 0; offset < kMaxRegistrySlots; ++offset) {
             const size_t idx = (preferredSlot + offset) % kMaxRegistrySlots;
@@ -602,9 +716,9 @@ namespace {
                     }
                 }
 
-                // Verify handle and generation under established lease
+                // Verify handle and generation under established lease - NO wildcard acceptance
                 if (slot.handle.load(std::memory_order_acquire) == handle &&
-                    (generation == 0 || slot.generationId.load(std::memory_order_acquire) == static_cast<uint64_t>(generation))) {
+                    slot.generationId.load(std::memory_order_acquire) == static_cast<uint64_t>(generation)) {
                     OboeStreamWrapper *w = slot.wrapper.load(std::memory_order_acquire);
                     if (w && w->isActive.load(std::memory_order_acquire)) {
                         lease.slot = &slot;
@@ -820,7 +934,16 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
          actualStreamRate, actualChannels);
 
     // Rule 4: Step 7 - Publish stream handle
-    return registerStream(wrapper);
+    const jlong handle = registerStream(wrapper);
+    if (handle == 0) {
+        LOGE("Failed to register Oboe stream in slot table (registry full); closing stream");
+        recordNativeDiag("REGISTER_FAILED", 0, gen, static_cast<int32_t>(NativeLifecycleState::FAILED));
+        wrapper->closeInternal();
+        wrapper->transitionState(NativeLifecycleState::FAILED);
+        return 0;
+    }
+    recordNativeDiag("REGISTER_SUCCESS", handle, gen, static_cast<int32_t>(NativeLifecycleState::OPEN));
+    return handle;
 }
 
 JNIEXPORT jlong JNICALL
@@ -865,11 +988,15 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         return 0; // concurrent write detected; single-writer model
     }
     struct WriterGuard {
-        std::atomic<int32_t> &writers;
+        OboeStreamWrapper *w;
         ~WriterGuard() {
-            writers.store(0, std::memory_order_release);
+            w->activeWriters_.store(0, std::memory_order_release);
+            if (w->quiesceRequested_.load(std::memory_order_acquire)) {
+                std::lock_guard<std::mutex> lk(w->quiesceMutex_);
+                w->quiesceCv_.notify_all();
+            }
         }
-    } writerGuard{wrapper->activeWriters_};
+    } writerGuard{wrapper};
 
     if (!wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
@@ -1299,7 +1426,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setPeqBands(
     auto w = getStream(handle);
     if (!w) return;
     if (!types || !freqs || !qs || !gains) {
-        w->dsp.clearPeqBands();
+        LOGW("setPeqBands: null array provided; retaining last known valid PEQ state");
         return;
     }
     const jsize count = env->GetArrayLength(types);
@@ -1307,35 +1434,49 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setPeqBands(
         env->GetArrayLength(freqs) != count ||
         env->GetArrayLength(qs) != count ||
         env->GetArrayLength(gains) != count) {
-        w->dsp.clearPeqBands();
+        LOGW("setPeqBands: mismatched array lengths; retaining last known valid PEQ state");
         return;
     }
 
-    std::vector<antigravity::PeqBandParams> bands;
     const size_t limit = std::min(static_cast<size_t>(count), static_cast<size_t>(32));
-    bands.reserve(limit);
-
     jint *t = env->GetIntArrayElements(types, nullptr);
     jdouble *f = env->GetDoubleArrayElements(freqs, nullptr);
     jdouble *q = env->GetDoubleArrayElements(qs, nullptr);
     jdouble *g = env->GetDoubleArrayElements(gains, nullptr);
 
-    if (t && f && q && g) {
-        for (size_t i = 0; i < limit; ++i) {
-            antigravity::PeqBandParams band;
-            band.type = static_cast<antigravity::FilterType>(t[i]);
-            band.frequency = f[i];
-            band.q = q[i];
-            band.gainDb = g[i];
-            band.enabled = true;
-            bands.push_back(band);
-        }
+    if (!t || !f || !q || !g) {
+        LOGE("setPeqBands: failed to access JNI arrays; retaining last valid PEQ state");
+        if (t) env->ReleaseIntArrayElements(types, t, JNI_ABORT);
+        if (f) env->ReleaseDoubleArrayElements(freqs, f, JNI_ABORT);
+        if (q) env->ReleaseDoubleArrayElements(qs, q, JNI_ABORT);
+        if (g) env->ReleaseDoubleArrayElements(gains, g, JNI_ABORT);
+        return;
     }
 
-    if (t) env->ReleaseIntArrayElements(types, t, JNI_ABORT);
-    if (f) env->ReleaseDoubleArrayElements(freqs, f, JNI_ABORT);
-    if (q) env->ReleaseDoubleArrayElements(qs, q, JNI_ABORT);
-    if (g) env->ReleaseDoubleArrayElements(gains, g, JNI_ABORT);
+    std::vector<antigravity::PeqBandParams> bands;
+    bands.reserve(limit);
+    for (size_t i = 0; i < limit; ++i) {
+        if (!std::isfinite(f[i]) || !std::isfinite(q[i]) || !std::isfinite(g[i])) {
+            LOGW("setPeqBands: non-finite PEQ band values at index %zu; retaining last valid PEQ state", i);
+            env->ReleaseIntArrayElements(types, t, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(freqs, f, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(qs, q, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(gains, g, JNI_ABORT);
+            return;
+        }
+        antigravity::PeqBandParams band;
+        band.type = static_cast<antigravity::FilterType>(std::clamp(t[i], 0, 7));
+        band.frequency = std::clamp(f[i], 10.0, 24000.0);
+        band.q = std::clamp(q[i], 0.05, 100.0);
+        band.gainDb = std::clamp(g[i], -36.0, 36.0);
+        band.enabled = true;
+        bands.push_back(band);
+    }
+
+    env->ReleaseIntArrayElements(types, t, JNI_ABORT);
+    env->ReleaseDoubleArrayElements(freqs, f, JNI_ABORT);
+    env->ReleaseDoubleArrayElements(qs, q, JNI_ABORT);
+    env->ReleaseDoubleArrayElements(gains, g, JNI_ABORT);
 
     w->dsp.setPeqBandsBatch(bands);
 }
@@ -1362,7 +1503,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setHrtfSpatialEnabled(
 JNIEXPORT void JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_setHrtfRoomSize(
     JNIEnv *env, jobject thiz, jlong handle, jdouble roomSize) {
-    if (auto w = getStream(handle)) w->dsp.setHrtfRoomSize(roomSize);
+    if (auto w = getStream(handle)) {
+        if (std::isfinite(roomSize)) {
+            w->dsp.setHrtfRoomSize(std::clamp(roomSize, 0.0, 1.0));
+        }
+    }
 }
 
 // Batch DSP parameters: updates all feature flags and parameters in one seqlock cycle (Rule 8)
@@ -1378,7 +1523,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspParametersBatch(
     antigravity::DspParams p;
     p.enabled = (enabled == JNI_TRUE);
     p.bitPerfectBypass = (bitPerfectBypass == JNI_TRUE);
-    p.outputBitDepth = outputBitDepth;
+    p.outputBitDepth = (outputBitDepth == 16 || outputBitDepth == 24 || outputBitDepth == 32) ? outputBitDepth : 24;
     p.invertPhase = (invertPhase == JNI_TRUE);
 
     if (activeFlags && env->GetArrayLength(activeFlags) >= 17) {
@@ -1406,25 +1551,31 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspParametersBatch(
     if (doubleParams && env->GetArrayLength(doubleParams) >= 27) {
         jdouble vals[27];
         env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
-        p.preAmpGainDb = vals[0];
-        p.bassBoostGainDb = vals[1];
-        p.trebleGainDb = vals[2];
-        p.harmonicExciterLevel = vals[3];
-        p.clarityEnhancerGainDb = vals[4];
-        p.stereoExpansionMultiplier = vals[5];
-        p.dvcVolume = vals[6];
-        p.replayGainMultiplier = vals[7];
-        p.ditherStrength = vals[8];
-        p.warmSaturationLevel = vals[9];
-        p.triodeWarmthLevel = vals[10];
-        p.pentodeTapeLevel = vals[11];
-        p.crossfeedLevel = vals[12];
-        p.limiterThresholdDb = vals[13];
-        p.channelBalance = vals[14];
-        p.airPresenceGainDb = vals[15];
-        p.hrtfRoomSize = vals[16];
+        for (int i = 0; i < 27; ++i) {
+            if (!std::isfinite(vals[i])) {
+                LOGW("setDspParametersBatch: non-finite parameter at index %d; rejecting batch update", i);
+                return; // Fail closed: do NOT corrupt live DSP state with NaNs/Infs
+            }
+        }
+        p.preAmpGainDb = std::clamp(vals[0], -20.0, 20.0);
+        p.bassBoostGainDb = std::clamp(vals[1], 0.0, 15.0);
+        p.trebleGainDb = std::clamp(vals[2], 0.0, 15.0);
+        p.harmonicExciterLevel = std::clamp(vals[3], 0.0, 1.0);
+        p.clarityEnhancerGainDb = std::clamp(vals[4], 0.0, 15.0);
+        p.stereoExpansionMultiplier = std::clamp(vals[5], 0.0, 2.0);
+        p.dvcVolume = std::clamp(vals[6], 0.0, 1.0);
+        p.replayGainMultiplier = std::clamp(vals[7], 0.01, 10.0);
+        p.ditherStrength = std::clamp(vals[8], 0.0, 1.0);
+        p.warmSaturationLevel = std::clamp(vals[9], 0.0, 1.0);
+        p.triodeWarmthLevel = std::clamp(vals[10], 0.0, 1.0);
+        p.pentodeTapeLevel = std::clamp(vals[11], 0.0, 1.0);
+        p.crossfeedLevel = std::clamp(vals[12], 0.0, 1.0);
+        p.limiterThresholdDb = std::clamp(vals[13], -20.0, 0.0);
+        p.channelBalance = std::clamp(vals[14], -1.0, 1.0);
+        p.airPresenceGainDb = std::clamp(vals[15], 0.0, 15.0);
+        p.hrtfRoomSize = std::clamp(vals[16], 0.0, 1.0);
         for (int i = 0; i < 10; ++i) {
-            p.bandGainsDb[i] = vals[17 + i];
+            p.bandGainsDb[i] = std::clamp(vals[17 + i], -15.0, 15.0);
         }
     }
 
@@ -1445,7 +1596,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
     antigravity::DspParams p;
     p.enabled = (enabled == JNI_TRUE);
     p.bitPerfectBypass = (bitPerfectBypass == JNI_TRUE);
-    p.outputBitDepth = outputBitDepth;
+    p.outputBitDepth = (outputBitDepth == 16 || outputBitDepth == 24 || outputBitDepth == 32) ? outputBitDepth : 24;
     p.invertPhase = (invertPhase == JNI_TRUE);
 
     if (activeFlags && env->GetArrayLength(activeFlags) >= 17) {
@@ -1473,25 +1624,31 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
     if (doubleParams && env->GetArrayLength(doubleParams) >= 27) {
         jdouble vals[27];
         env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
-        p.preAmpGainDb = vals[0];
-        p.bassBoostGainDb = vals[1];
-        p.trebleGainDb = vals[2];
-        p.harmonicExciterLevel = vals[3];
-        p.clarityEnhancerGainDb = vals[4];
-        p.stereoExpansionMultiplier = vals[5];
-        p.dvcVolume = vals[6];
-        p.replayGainMultiplier = vals[7];
-        p.ditherStrength = vals[8];
-        p.warmSaturationLevel = vals[9];
-        p.triodeWarmthLevel = vals[10];
-        p.pentodeTapeLevel = vals[11];
-        p.crossfeedLevel = vals[12];
-        p.limiterThresholdDb = vals[13];
-        p.channelBalance = vals[14];
-        p.airPresenceGainDb = vals[15];
-        p.hrtfRoomSize = vals[16];
+        for (int i = 0; i < 27; ++i) {
+            if (!std::isfinite(vals[i])) {
+                LOGW("setDspUnifiedConfig: non-finite parameter at index %d; rejecting unified update", i);
+                return; // Fail closed: reject invalid parameters completely
+            }
+        }
+        p.preAmpGainDb = std::clamp(vals[0], -20.0, 20.0);
+        p.bassBoostGainDb = std::clamp(vals[1], 0.0, 15.0);
+        p.trebleGainDb = std::clamp(vals[2], 0.0, 15.0);
+        p.harmonicExciterLevel = std::clamp(vals[3], 0.0, 1.0);
+        p.clarityEnhancerGainDb = std::clamp(vals[4], 0.0, 15.0);
+        p.stereoExpansionMultiplier = std::clamp(vals[5], 0.0, 2.0);
+        p.dvcVolume = std::clamp(vals[6], 0.0, 1.0);
+        p.replayGainMultiplier = std::clamp(vals[7], 0.01, 10.0);
+        p.ditherStrength = std::clamp(vals[8], 0.0, 1.0);
+        p.warmSaturationLevel = std::clamp(vals[9], 0.0, 1.0);
+        p.triodeWarmthLevel = std::clamp(vals[10], 0.0, 1.0);
+        p.pentodeTapeLevel = std::clamp(vals[11], 0.0, 1.0);
+        p.crossfeedLevel = std::clamp(vals[12], 0.0, 1.0);
+        p.limiterThresholdDb = std::clamp(vals[13], -20.0, 0.0);
+        p.channelBalance = std::clamp(vals[14], -1.0, 1.0);
+        p.airPresenceGainDb = std::clamp(vals[15], 0.0, 15.0);
+        p.hrtfRoomSize = std::clamp(vals[16], 0.0, 1.0);
         for (int i = 0; i < 10; ++i) {
-            p.bandGainsDb[i] = vals[17 + i];
+            p.bandGainsDb[i] = std::clamp(vals[17 + i], -15.0, 15.0);
         }
     }
 
@@ -1511,22 +1668,48 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
             jdouble *g = env->GetDoubleArrayElements(peqGains, nullptr);
             jboolean *e = peqEnableds ? env->GetBooleanArrayElements(peqEnableds, nullptr) : nullptr;
 
-            if (t && f && q && g) {
-                for (size_t i = 0; i < limit; ++i) {
-                    antigravity::PeqBandParams band;
-                    band.type = static_cast<antigravity::FilterType>(t[i]);
-                    band.frequency = f[i];
-                    band.q = q[i];
-                    band.gainDb = g[i];
-                    band.enabled = e ? (e[i] == JNI_TRUE) : true;
-                    bands.push_back(band);
+            if (!t || !f || !q || !g) {
+                LOGE("setDspUnifiedConfig: failed to access PEQ JNI arrays; rejecting PEQ part");
+                if (t) env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
+                if (f) env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
+                if (q) env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
+                if (g) env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
+                if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
+                return;
+            }
+
+            bool hasNonFinitePeq = false;
+            for (size_t i = 0; i < limit; ++i) {
+                if (!std::isfinite(f[i]) || !std::isfinite(q[i]) || !std::isfinite(g[i])) {
+                    hasNonFinitePeq = true;
+                    break;
                 }
             }
 
-            if (t) env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
-            if (f) env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
-            if (q) env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
-            if (g) env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
+            if (hasNonFinitePeq) {
+                LOGW("setDspUnifiedConfig: non-finite PEQ parameters detected; rejecting update");
+                env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
+                env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
+                env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
+                env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
+                if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
+                return;
+            }
+
+            for (size_t i = 0; i < limit; ++i) {
+                antigravity::PeqBandParams band;
+                band.type = static_cast<antigravity::FilterType>(std::clamp(t[i], 0, 7));
+                band.frequency = std::clamp(f[i], 10.0, 24000.0);
+                band.q = std::clamp(q[i], 0.05, 100.0);
+                band.gainDb = std::clamp(g[i], -36.0, 36.0);
+                band.enabled = e ? (e[i] == JNI_TRUE) : true;
+                bands.push_back(band);
+            }
+
+            env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
+            env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
             if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
         }
     }
@@ -1672,6 +1855,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getNativeStreamInfo(
     }
     env->DeleteLocalRef(infoClass);
     return infoObject;
+}
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
+    installNativeSignalHandler();
+    return JNI_VERSION_1_6;
 }
 
 } // extern "C"

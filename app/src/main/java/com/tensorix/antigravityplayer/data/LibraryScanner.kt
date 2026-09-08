@@ -21,7 +21,27 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
         val scanStartTimestamp = System.currentTimeMillis()
         val scannedSongs = mutableListOf<Song>()
 
-        val existingSongsMap = songDao.getAllLocalSongsList().associateBy { it.filePath }
+        val existingSongs = songDao.getAllLocalSongsList()
+        val existingByPath = existingSongs.associateBy { it.filePath }
+        val existingByMediaId = mutableMapOf<Long, Song>()
+        val existingByFileName = mutableMapOf<String, Song>()
+        val existingByCanonical = mutableMapOf<String, Song>()
+        val claimedSongIds = mutableSetOf<Long>()
+
+        for (song in existingSongs) {
+            if (song.filePath.startsWith("content://")) {
+                val extractedId = song.filePath.substringAfterLast('/').toLongOrNull()
+                if (extractedId != null) {
+                    existingByMediaId[extractedId] = song
+                }
+            }
+            val fileName = song.filePath.substringAfterLast('/')
+            if (fileName.isNotBlank()) {
+                existingByFileName[fileName.lowercase()] = song
+            }
+            val canonicalKey = "${song.title.trim().lowercase()}|${song.artist.trim().lowercase()}|${song.durationMs / 1000}"
+            existingByCanonical[canonicalKey] = song
+        }
 
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -100,7 +120,29 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                 var sampleRate = 0
                 
                 val format = detectAudioFormat(playUri, rawFilePath, mimeType)
-                val existing = existingSongsMap[playUri] ?: existingSongsMap[rawFilePath]
+
+                var existing: Song? = existingByPath[playUri] ?: if (rawFilePath.isNotBlank()) existingByPath[rawFilePath] else null
+                if (existing == null && mediaId > 0) {
+                    existing = existingByMediaId[mediaId]
+                }
+                if (existing == null && rawFilePath.isNotBlank()) {
+                    val fileName = rawFilePath.substringAfterLast('/').lowercase()
+                    val candidate = existingByFileName[fileName]
+                    if (candidate != null && Math.abs(candidate.durationMs - duration) <= 2000L) {
+                        existing = candidate
+                    }
+                }
+                if (existing == null) {
+                    val canonicalKey = "${title.trim().lowercase()}|${artist.trim().lowercase()}|${duration / 1000}"
+                    existing = existingByCanonical[canonicalKey]
+                }
+                if (existing != null && claimedSongIds.contains(existing.id)) {
+                    existing = null
+                }
+                if (existing != null) {
+                    claimedSongIds.add(existing.id)
+                }
+
                 val isFav = existing?.isFavorite ?: false
                 
                 if (existing != null && existing.bitrate > 0 && existing.sampleRate > 0) {
@@ -172,13 +214,21 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
         }
 
         if (scannedSongs.isNotEmpty()) {
-            songDao.insertSongs(scannedSongs)
+            val toUpdate = scannedSongs.filter { it.id > 0L }
+            val toInsert = scannedSongs.filter { it.id == 0L }
+
+            if (toUpdate.isNotEmpty()) {
+                songDao.updateSongs(toUpdate)
+            }
+            if (toInsert.isNotEmpty()) {
+                songDao.insertSongsIgnore(toInsert)
+            }
             songDao.deleteStaleLocalSongs(scanStartTimestamp)
-        } else if (querySucceeded && existingSongsMap.isEmpty()) {
+        } else if (querySucceeded && existingSongs.isEmpty()) {
             // Legitimate empty library
             songDao.deleteStaleLocalSongs(scanStartTimestamp)
         } else {
-            android.util.Log.w("LibraryScanner", "Storage scan yielded 0 songs while existing library has ${existingSongsMap.size} tracks; preserving existing library.")
+            android.util.Log.w("LibraryScanner", "Storage scan yielded 0 songs while existing library has ${existingSongs.size} tracks; preserving existing library.")
         }
 
         return@withContext scannedSongs
