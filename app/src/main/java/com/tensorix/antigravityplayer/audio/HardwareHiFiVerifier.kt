@@ -111,6 +111,7 @@ object HardwareHiFiVerifier {
                 
                 // Rule 26: Direct Android SDK call without reflection
                 runCatching {
+                    @Suppress("DEPRECATION")
                     AudioTrack.isDirectPlaybackSupported(format, attr)
                 }.getOrDefault(false)
             }
@@ -311,6 +312,7 @@ object HardwareHiFiVerifier {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
                     val isSupported = runCatching {
+                        @Suppress("DEPRECATION")
                         AudioTrack.isDirectPlaybackSupported(format, attributes)
                     }.getOrDefault(false)
                     if (isSupported) {

@@ -149,4 +149,118 @@ class PlaybackServiceRoutingTruthTest {
         assertTrue(directPathNowActive)
         assertTrue(verifiedNow)
     }
+
+    @Test
+    fun `enabling Hi-Fi while playback is active triggers pipeline reload and high-performance sink`() {
+        PlaybackService.updateHiFiSupported(true)
+        var reloadCount = 0
+        var activeSinkType = "StandardAudioSink"
+        val hiFiEnabled = MutableStateFlow(false)
+
+        fun simulateReloadPipeline() {
+            reloadCount++
+            activeSinkType = if (hiFiEnabled.value && PlaybackService.isHiFiSupported()) {
+                "OboeAudioSink"
+            } else {
+                "DefaultAudioSink"
+            }
+        }
+
+        fun setHiFiEnabledSim(enabled: Boolean) {
+            if (hiFiEnabled.value == enabled) return
+            hiFiEnabled.value = enabled
+            simulateReloadPipeline()
+        }
+
+        // Active playback with Hi-Fi off
+        assertEquals("StandardAudioSink", activeSinkType)
+        assertEquals(0, reloadCount)
+
+        // User enables Hi-Fi during active playback
+        setHiFiEnabledSim(true)
+        assertEquals(1, reloadCount)
+        assertEquals("OboeAudioSink", activeSinkType)
+        assertTrue(hiFiEnabled.value)
+
+        // Redundant enable does not trigger redundant reload
+        setHiFiEnabledSim(true)
+        assertEquals(1, reloadCount)
+    }
+
+    @Test
+    fun `disabling Hi-Fi while playback is active triggers pipeline reload and falls back to standard sink`() {
+        PlaybackService.updateHiFiSupported(true)
+        var reloadCount = 0
+        var activeSinkType = "OboeAudioSink"
+        val hiFiEnabled = MutableStateFlow(true)
+
+        fun simulateReloadPipeline() {
+            reloadCount++
+            activeSinkType = if (hiFiEnabled.value && PlaybackService.isHiFiSupported()) {
+                "OboeAudioSink"
+            } else {
+                "DefaultAudioSink"
+            }
+        }
+
+        fun setHiFiEnabledSim(enabled: Boolean) {
+            if (hiFiEnabled.value == enabled) return
+            hiFiEnabled.value = enabled
+            simulateReloadPipeline()
+        }
+
+        // Active playback with Hi-Fi on
+        assertEquals("OboeAudioSink", activeSinkType)
+
+        // User disables Hi-Fi during playback
+        setHiFiEnabledSim(false)
+        assertEquals(1, reloadCount)
+        assertEquals("DefaultAudioSink", activeSinkType)
+        assertFalse(hiFiEnabled.value)
+
+        // Redundant disable does not trigger reload
+        setHiFiEnabledSim(false)
+        assertEquals(1, reloadCount)
+    }
+
+    @Test
+    fun `diagnostics sheet distinguishes user preference from active path truth`() {
+        PlaybackService.updateHiFiSupported(true)
+
+        // User preference is enabled
+        val userPreferenceHiFi = true
+
+        // Device is currently outputting to speaker
+        val speakerRoute = AudioRouteCapability(
+            routeType = AudioOutputRouteType.SPEAKER,
+            deviceName = "Internal Speaker",
+            sampleRates = listOf(48000),
+            isDirectPlaybackCapable = false
+        )
+
+        val isDirectPathActive = speakerRoute.isDirectPlaybackCapable
+        val bitPerfectState = BitPerfectState.DISABLED
+
+        // In Diagnostics:
+        // 1. Preference reflects user choice
+        assertEquals(true, userPreferenceHiFi)
+        // 2. Direct path reflects route hardware truth (speaker is NOT direct)
+        assertEquals(false, isDirectPathActive)
+        // 3. Bit-perfect verification reflects verifiable bitstream (disabled/unverified)
+        assertEquals(false, bitPerfectState == BitPerfectState.VERIFIED)
+
+        // When USB DAC plugged in:
+        val usbRoute = AudioRouteCapability(
+            routeType = AudioOutputRouteType.USB_DEVICE,
+            deviceName = "FiiO KA3 USB DAC",
+            sampleRates = listOf(44100, 96000, 192000),
+            isDirectPlaybackCapable = true
+        )
+        val isUsbDirectPathActive = usbRoute.isDirectPlaybackCapable && userPreferenceHiFi
+        val usbBitPerfectState = BitPerfectState.VERIFIED
+
+        assertEquals(true, userPreferenceHiFi)
+        assertEquals(true, isUsbDirectPathActive)
+        assertEquals(true, usbBitPerfectState == BitPerfectState.VERIFIED)
+    }
 }

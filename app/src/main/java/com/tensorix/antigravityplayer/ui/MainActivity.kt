@@ -242,6 +242,7 @@ fun MainAppScreen(
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
     val hifiActive by viewModel.hifiActive.collectAsStateWithLifecycle()
     val hiFiSupported by viewModel.hiFiSupported.collectAsStateWithLifecycle()
+    val hiFiEnabled by viewModel.hiFiEnabled.collectAsStateWithLifecycle()
 
     val lyricsLines by viewModel.lyricsLines.collectAsStateWithLifecycle()
     val audioSnapshot by viewModel.audioSnapshot.collectAsStateWithLifecycle()
@@ -465,7 +466,7 @@ fun MainAppScreen(
                 snapshot = audioSnapshot,
                 isBitPerfectMode = isBitPerfectMode,
                 isSampleRateMatching = isSampleRateMatching,
-                isHiFiEnabled = hifiActive,
+                isHiFiEnabled = hiFiEnabled,
                 onToggleBitPerfect = { viewModel.setBitPerfectMode(it) },
                 onToggleSampleRateMatching = { viewModel.setSampleRateMatching(it) },
                 onToggleHiFi = { viewModel.setHiFiAudioSinkEnabled(it) },

@@ -184,6 +184,42 @@ fun AudiophileInfoScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Hardware Hi-Fi Sink Switch
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CardBackground.copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, tint = PrimaryCyan, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text("Audiophile Hi-Fi Sink Preference", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        val prefSubtitle = if (isHiFiEnabled) "High-Performance Oboe / 32-bit Float Pipeline" else "Standard Android Mixer Path (16-bit PCM)"
+                        Text(prefSubtitle, color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+                Switch(
+                    checked = isHiFiEnabled,
+                    onCheckedChange = onToggleHiFi,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = PrimaryCyan,
+                        uncheckedTrackColor = SurfaceDark
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // UNIVERSAL HI-FI HARDWARE & 3-MODE STUDIO LISTENING SELECTOR
         val eqEngine = PlaybackService.instance?.equalizerEngine
         val currentMode = eqEngine?.listeningMode?.collectAsStateWithLifecycle()?.value ?: com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE
@@ -384,6 +420,8 @@ fun AudiophileInfoScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    EvidenceItem("Hi-Fi Sink Preference", AudioEvidence(if (isHiFiEnabled) "ENABLED" else "DISABLED", EvidenceSource.VENDOR_API, Confidence.VERIFIED))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.05f))
                     EvidenceItem("Audio API", snapshotData.audioApi)
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.05f))
                     EvidenceItem("Sharing Mode", snapshotData.sharingMode)

@@ -83,6 +83,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _hiFiSupported = MutableStateFlow<Boolean>(PlaybackService.isHiFiSupported())
     val hiFiSupported: StateFlow<Boolean> = _hiFiSupported.asStateFlow()
 
+    private val _hiFiEnabled = MutableStateFlow(
+        PlaybackService.instance?.hiFiEnabled?.value
+            ?: application.getSharedPreferences("antigravity_audio_prefs", Context.MODE_PRIVATE).getBoolean("hi_fi_enabled", true)
+    )
+    val hiFiEnabled: StateFlow<Boolean> = _hiFiEnabled.asStateFlow()
+
     private val _isBitPerfectMode = MutableStateFlow(false)
     val isBitPerfectMode: StateFlow<Boolean> = _isBitPerfectMode.asStateFlow()
 
@@ -186,6 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             PlaybackService.instanceFlow.collectLatest { service ->
                 if (service != null) {
                     kotlinx.coroutines.coroutineScope {
+                        launch { service.hiFiEnabled.collect { _hiFiEnabled.value = it } }
                         launch { service.bitPerfectMode.collect { _isBitPerfectMode.value = it } }
                         launch { service.sampleRateMatching.collect { _isSampleRateMatching.value = it } }
                         launch { service.audioAuxEnabled.collect { _audioAuxEnabled.value = it } }
@@ -222,6 +229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (service != null) {
             _audioSnapshot.value = service.audiophileSnapshot.value
             _hiFiSupported.value = PlaybackService.isHiFiSupported()
+            _hiFiEnabled.value = service.hiFiEnabled.value
             return
         }
 
@@ -268,6 +276,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setHiFiAudioSinkEnabled(enabled: Boolean) {
+        _hiFiEnabled.value = enabled
         PlaybackService.instance?.setHiFiEnabled(enabled)
         refreshAudioSnapshot()
     }

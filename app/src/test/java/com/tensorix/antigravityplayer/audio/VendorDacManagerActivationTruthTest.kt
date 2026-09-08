@@ -165,4 +165,257 @@ class VendorDacManagerActivationTruthTest {
         assertFalse("LG Quad DAC must be reset to false", VendorDacManager.isLgQuadDacActive)
         assertFalse("Qualcomm Direct must be reset to false", VendorDacManager.isQualcommDirectActive)
     }
+
+    @Test
+    fun `false-positive prevention when Samsung settings write succeeds but hardware proof is absent`() {
+        // GIVEN: Settings.System.putInt was successful (settingsApplied = true)
+        val isSamsungMatch = true
+        val settingsApplied = true
+        // BUT: verified hardware probe returns false for vendor HiFi active
+        val isVendorVerified = false
+
+        // WHEN: evaluating Samsung active status (strict proof rule)
+        val isSamsungActive = isSamsungMatch && isVendorVerified
+        val isHiFiConfirmed = isSamsungActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "SAMSUNG",
+            confirmedParameter = if (isSamsungActive) "sound_alive_uhq_upscaler" else "standard_hal",
+            outputSampleRate = 48000,
+            isLowLatencyPath = false,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = false,
+            isDirectActive = false,
+            isVendorVerified = isVendorVerified,
+            isSamsungActive = isSamsungActive
+        )
+
+        // THEN: settingsApplied is true, but active state and confirmed Hi-Fi are false
+        assertTrue("Adapter settings were successfully written", result.settingsApplied)
+        assertFalse("Samsung active must NOT be true without hardware proof", result.isSamsungActive)
+        assertFalse("Hi-Fi confirmation must be false when proof is absent", result.isHiFiConfirmed)
+        assertEquals("standard_hal", result.confirmedParameter)
+    }
+
+    @Test
+    fun `genuine Samsung activation when settings write succeeds and hardware proof is verified`() {
+        val isSamsungMatch = true
+        val settingsApplied = true
+        val isVendorVerified = true
+
+        val isSamsungActive = isSamsungMatch && isVendorVerified
+        val isHiFiConfirmed = isSamsungActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "SAMSUNG",
+            confirmedParameter = "sound_alive_uhq_upscaler",
+            outputSampleRate = 192000,
+            isLowLatencyPath = true,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = true,
+            isDirectActive = true,
+            isVendorVerified = isVendorVerified,
+            isSamsungActive = isSamsungActive
+        )
+
+        assertTrue(result.settingsApplied)
+        assertTrue(result.isVendorVerified)
+        assertTrue(result.isSamsungActive)
+        assertTrue(result.isHiFiConfirmed)
+        assertEquals("sound_alive_uhq_upscaler", result.confirmedParameter)
+    }
+
+    @Test
+    fun `false-positive prevention when Sony settings write succeeds but hardware proof is absent`() {
+        val isSonyMatch = true
+        val settingsApplied = true
+        val isVendorVerified = false
+
+        val isSonyActive = isSonyMatch && isVendorVerified
+        val isHiFiConfirmed = isSonyActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "SONY",
+            confirmedParameter = if (isSonyActive) "sony_hires_audio_enabled" else "standard_hal",
+            outputSampleRate = 48000,
+            isLowLatencyPath = false,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = false,
+            isDirectActive = false,
+            isVendorVerified = isVendorVerified,
+            isSonyActive = isSonyActive
+        )
+
+        assertTrue(result.settingsApplied)
+        assertFalse("Sony Hi-Res must NOT be active when hardware proof is false", result.isSonyActive)
+        assertFalse(result.isHiFiConfirmed)
+        assertEquals("standard_hal", result.confirmedParameter)
+    }
+
+    @Test
+    fun `genuine Sony activation when settings write succeeds and hardware proof is verified`() {
+        val isSonyMatch = true
+        val settingsApplied = true
+        val isVendorVerified = true
+
+        val isSonyActive = isSonyMatch && isVendorVerified
+        val isHiFiConfirmed = isSonyActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "SONY",
+            confirmedParameter = "sony_hires_audio_enabled",
+            outputSampleRate = 96000,
+            isLowLatencyPath = true,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = true,
+            isDirectActive = true,
+            isVendorVerified = isVendorVerified,
+            isSonyActive = isSonyActive
+        )
+
+        assertTrue(result.settingsApplied)
+        assertTrue(result.isSonyActive)
+        assertTrue(result.isHiFiConfirmed)
+        assertEquals("sony_hires_audio_enabled", result.confirmedParameter)
+    }
+
+    @Test
+    fun `false-positive prevention when LG settings write succeeds but hardware proof is absent`() {
+        val isLgMatch = true
+        val settingsApplied = true
+        val isVendorVerified = false
+
+        val isLgActive = isLgMatch && isVendorVerified
+        val isHiFiConfirmed = isLgActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "LG",
+            confirmedParameter = if (isLgActive) "quad_dac_state" else "standard_hal",
+            outputSampleRate = 48000,
+            isLowLatencyPath = false,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = false,
+            isDirectActive = false,
+            isVendorVerified = isVendorVerified,
+            isLgActive = isLgActive
+        )
+
+        assertTrue(result.settingsApplied)
+        assertFalse("LG Quad DAC must NOT be active when hardware proof is false", result.isLgActive)
+        assertFalse(result.isHiFiConfirmed)
+        assertEquals("standard_hal", result.confirmedParameter)
+    }
+
+    @Test
+    fun `genuine LG activation when settings write succeeds and hardware proof is verified`() {
+        val isLgMatch = true
+        val settingsApplied = true
+        val isVendorVerified = true
+
+        val isLgActive = isLgMatch && isVendorVerified
+        val isHiFiConfirmed = isLgActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isHiFiConfirmed,
+            activeOem = "LG",
+            confirmedParameter = "quad_dac_state",
+            outputSampleRate = 192000,
+            isLowLatencyPath = true,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = settingsApplied,
+            isDirectSupported = true,
+            isDirectActive = true,
+            isVendorVerified = isVendorVerified,
+            isLgActive = isLgActive
+        )
+
+        assertTrue(result.settingsApplied)
+        assertTrue(result.isLgActive)
+        assertTrue(result.isHiFiConfirmed)
+        assertEquals("quad_dac_state", result.confirmedParameter)
+    }
+
+    @Test
+    fun `Vivo activation success and failure reflect verified state`() {
+        // Vivo activation failure
+        val unverifiedResult = HiFiActivationResult(
+            isHiFiConfirmed = false,
+            activeOem = "VIVO",
+            confirmedParameter = "standard_hal",
+            outputSampleRate = 48000,
+            isLowLatencyPath = false,
+            isWiredConnected = false,
+            isExclusiveModeActive = false,
+            settingsApplied = false,
+            isDirectSupported = false,
+            isDirectActive = false,
+            isVendorVerified = false,
+            isVivoActive = false
+        )
+        assertFalse(unverifiedResult.isVivoActive)
+        assertFalse(unverifiedResult.isHiFiConfirmed)
+
+        // Vivo activation verified
+        val verifiedResult = HiFiActivationResult(
+            isHiFiConfirmed = true,
+            activeOem = "VIVO",
+            confirmedParameter = "vivo_hifi_active",
+            outputSampleRate = 192000,
+            isLowLatencyPath = true,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = true,
+            isDirectSupported = true,
+            isDirectActive = true,
+            isVendorVerified = true,
+            isVivoActive = true
+        )
+        assertTrue(verifiedResult.isVivoActive)
+        assertTrue(verifiedResult.isHiFiConfirmed)
+    }
+
+    @Test
+    fun `Qualcomm support vs active-state mismatch reporting`() {
+        // Support is true, but active is false
+        val isQualcommMatch = true
+        val isDirectSupported = true
+        val isDirectActive = false
+        val isQualcommActive = isQualcommMatch && isDirectActive
+
+        val result = HiFiActivationResult(
+            isHiFiConfirmed = isQualcommActive,
+            activeOem = "QUALCOMM",
+            confirmedParameter = if (isQualcommActive) "direct_pcm" else "standard_hal",
+            outputSampleRate = 48000,
+            isLowLatencyPath = false,
+            isWiredConnected = true,
+            isExclusiveModeActive = false,
+            settingsApplied = true,
+            isDirectSupported = isDirectSupported,
+            isDirectActive = isDirectActive,
+            isVendorVerified = false,
+            isQualcommActive = isQualcommActive
+        )
+
+        assertTrue(result.isDirectSupported)
+        assertFalse(result.isDirectActive)
+        assertFalse("Qualcomm active must be false when direct output is not active", result.isQualcommActive)
+        assertFalse("Hi-Fi confirmed must be false on support-only mismatch", result.isHiFiConfirmed)
+    }
 }

@@ -72,7 +72,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "antigravity_player.db"
                 )
                     .addMigrations(*MIGRATIONS)
-                    .fallbackToDestructiveMigrationOnDowngrade()
+                    .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                     .build()
                 INSTANCE = instance
                 instance

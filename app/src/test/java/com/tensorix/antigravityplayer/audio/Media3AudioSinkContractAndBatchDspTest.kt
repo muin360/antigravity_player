@@ -136,6 +136,7 @@ class Media3AudioSinkContractAndBatchDspTest {
 
         override fun getAll(): Map<String, *> = values
         override fun getString(key: String?, defValue: String?): String? = values[key] as? String ?: defValue
+        @Suppress("UNCHECKED_CAST")
         override fun getStringSet(key: String?, defValues: Set<String>?): Set<String>? = values[key] as? Set<String> ?: defValues
         override fun getInt(key: String?, defValue: Int): Int = values[key] as? Int ?: defValue
         override fun getLong(key: String?, defValue: Long): Long = values[key] as? Long ?: defValue

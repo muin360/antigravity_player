@@ -1,3 +1,4 @@
+@file:Suppress("DEPRECATION")
 package com.tensorix.antigravityplayer.player
 
 import android.content.Context

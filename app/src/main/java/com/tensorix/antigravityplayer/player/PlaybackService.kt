@@ -317,7 +317,7 @@ class PlaybackService : MediaSessionService() {
 
                     Log.d("AntigravityAudioAudit", "Building Sink: activeRoute=$activeRouteType, bitPerfect=$isBitPerfect, hiFiEnabled=${_hiFiEnabled.value}")
 
-                    if (com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
+                    if (_hiFiEnabled.value && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
                         try {
                             Log.i("AntigravityAudioAudit", "Using OboeAudioSink for High-Performance path (Bit-Perfect: $isBitPerfect)")
                             val sink = com.tensorix.antigravityplayer.audio.OboeAudioSink(
@@ -332,6 +332,8 @@ class PlaybackService : MediaSessionService() {
                         } catch (e: Exception) {
                             Log.e("AntigravityAudioAudit", "OboeAudioSink initialization failed, falling back to Default", e)
                         }
+                    } else {
+                        activeOboeAudioSink = null
                     }
 
                     dspProcessor.isTurboMode = _hiFiEnabled.value
@@ -348,7 +350,7 @@ class PlaybackService : MediaSessionService() {
                     val builder = DefaultAudioSink.Builder(context)
                         .setAudioProcessors(if (isBitPerfect) emptyArray() else arrayOf(dspProcessor))
                     
-                    if (!isBitPerfect && isHiFiSupported()) {
+                    if (!isBitPerfect && _hiFiEnabled.value && isHiFiSupported()) {
                         builder.setEnableFloatOutput(true)
                     } else {
                         builder.setEnableFloatOutput(false)
@@ -620,10 +622,12 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setHiFiEnabled(enabled: Boolean) {
+        if (_hiFiEnabled.value == enabled) return
         _hiFiEnabled.value = enabled
         audioPrefs.edit { putBoolean("hi_fi_enabled", enabled) }
         dspProcessor.isTurboMode = enabled
         AudioEngine.invalidate()
+        reloadAudioPipeline()
         refreshAudiophileState()
     }
 

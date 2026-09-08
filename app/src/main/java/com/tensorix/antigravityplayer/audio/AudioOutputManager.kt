@@ -183,6 +183,7 @@ class AudioOutputManager(
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
                 runCatching {
+                    @Suppress("DEPRECATION")
                     AudioTrack.isDirectPlaybackSupported(audioFormat, audioAttributes)
                 }.getOrDefault(false)
             }

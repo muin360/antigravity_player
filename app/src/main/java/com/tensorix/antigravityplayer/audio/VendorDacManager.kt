@@ -220,9 +220,9 @@ object VendorDacManager {
         val verifiedReport = HardwareHiFiVerifier.probeHardwareState(context)
         isVivoHiFiActive = isVivoMatch && verifiedReport.isVendorHiFiActive
         isQualcommDirectActive = isQualcommMatch && verifiedReport.isDirectOutputActive
-        isSamsungUhqActive = isSamsungMatch && adapterActivated
-        isSonyHiResActive = isSonyMatch && adapterActivated
-        isLgQuadDacActive = isLgMatch && adapterActivated
+        isSamsungUhqActive = isSamsungMatch && verifiedReport.isVendorHiFiActive
+        isSonyHiResActive = isSonyMatch && verifiedReport.isVendorHiFiActive
+        isLgQuadDacActive = isLgMatch && verifiedReport.isVendorHiFiActive
         detectedDacNameInternal = verifiedReport.activeDacName
 
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -265,6 +265,10 @@ object VendorDacManager {
             isLowLatencyPath = isLowLatency,
             isWiredConnected = isWired,
             isExclusiveModeActive = isExclusiveActive,
+            settingsApplied = adapterActivated,
+            isDirectSupported = verifiedReport.isDirectOutputSupported,
+            isDirectActive = verifiedReport.isDirectOutputActive,
+            isVendorVerified = verifiedReport.isVendorHiFiActive,
             isVivoActive = isVivoHiFiActive,
             isSamsungActive = isSamsungUhqActive,
             isSonyActive = isSonyHiResActive,
@@ -371,6 +375,10 @@ data class HiFiActivationResult(
     val isLowLatencyPath: Boolean,
     val isWiredConnected: Boolean,
     var isExclusiveModeActive: Boolean,
+    val settingsApplied: Boolean = false,
+    val isDirectSupported: Boolean = false,
+    val isDirectActive: Boolean = false,
+    val isVendorVerified: Boolean = false,
     val isVivoActive: Boolean = false,
     val isSamsungActive: Boolean = false,
     val isSonyActive: Boolean = false,
