@@ -112,7 +112,7 @@ class AudioOutputManager(
             }
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                    context.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
                 } else {
                     @Suppress("UnspecifiedRegisterReceiverFlag")
                     context.registerReceiver(usbReceiver, filter)
@@ -346,7 +346,7 @@ class AudioOutputManager(
             trackInfo = currentTrack,
             isDspActive = isDspActive,
             activeRoute = activeRoute,
-            dspProcessor = PlaybackService.instance?.dspProcessor
+            dspProcessor = com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor
         )
 
         val sampleRate = canonicalSnapshot.actualOutput.sampleRate.value
@@ -450,7 +450,7 @@ class AudioOutputManager(
         )
 
         // Stage 3: DSP / Equalizer Engine
-        val dsp = PlaybackService.instance?.dspProcessor
+        val dsp = com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor
         val dspEnabled = dsp != null && dsp.isEnabled && !dsp.isBitPerfectBypass
         if (dspEnabled) {
             stages.add(

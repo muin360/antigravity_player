@@ -60,9 +60,9 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    val hiFiEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.hiFiEnabled, true)
-    val sampleRateMatchingActive by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.sampleRateMatching, isSampleRateMatching)
-    val autoProfileSwitch by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.autoProfileSwitch, true)
+    val hiFiEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled, true)
+    val sampleRateMatchingActive by com.tensorix.antigravityplayer.ui.components.stableCollect(com.tensorix.antigravityplayer.audio.AudioEngineProvider.sampleRateMatching, isSampleRateMatching)
+    val autoProfileSwitch by com.tensorix.antigravityplayer.ui.components.stableCollect(com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoProfileSwitch, true)
 
     var showDiagnostics by remember { mutableStateOf(false) }
     var showOutputConfig by remember { mutableStateOf(false) }

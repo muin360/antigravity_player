@@ -176,7 +176,9 @@ object HardwareHiFiVerifier {
                     details.add("Direct PCM HAL parameter confirmed active via AudioManager")
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.w("HiFiVerifier", "Failed to query OEM capabilities via reflection", e)
+        }
 
         // 3. Probe Vendor Hi-Fi DAC State
         val (isVendorHiFi, dacState, dacName, dacVendor) = probeVendorDac(context, isWiredHeadset, details)

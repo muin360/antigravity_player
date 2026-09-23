@@ -21,6 +21,7 @@ import com.tensorix.antigravityplayer.util.LrcLine
 import com.tensorix.antigravityplayer.util.LrcParser
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -78,14 +79,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AudioOutputManager(application, registerSystemListeners = false)
     }
     val audioOutputManager: AudioOutputManager
-        get() = PlaybackService.instance?.audioOutputManager ?: fallbackOutputManager
+        get() = com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager ?: fallbackOutputManager
 
     private val _hiFiSupported = MutableStateFlow<Boolean>(PlaybackService.isHiFiSupported())
     val hiFiSupported: StateFlow<Boolean> = _hiFiSupported.asStateFlow()
 
     private val _hiFiEnabled = MutableStateFlow(
-        PlaybackService.instance?.hiFiEnabled?.value
-            ?: application.getSharedPreferences("antigravity_audio_prefs", Context.MODE_PRIVATE).getBoolean("hi_fi_enabled", true)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value ?: true
     )
     val hiFiEnabled: StateFlow<Boolean> = _hiFiEnabled.asStateFlow()
 
@@ -173,7 +173,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val queue get() = musicController.queue
 
     val equalizerEngine: EqualizerEngine?
-        get() = PlaybackService.instance?.equalizerEngine
+        get() = com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
@@ -187,6 +187,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshHiFiSupport()
         refreshAudioSnapshot()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            if (PlaybackService.instance == null) {
+                val prefs = application.getSharedPreferences("antigravity_audio_prefs", Context.MODE_PRIVATE)
+                _hiFiEnabled.value = prefs.getBoolean("hi_fi_enabled", true)
+            }
+        }
         
         viewModelScope.launch {
             PlaybackService.instanceFlow.collectLatest { service ->
@@ -254,14 +260,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         } ?: AudioTrackInfo()
         
-        val dspEnabled = PlaybackService.instance?.equalizerEngine?.isEnabled?.value ?: false
-        val isBitPerfect = PlaybackService.instance?.bitPerfectMode?.value ?: false
+        val dspEnabled = com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine?.isEnabled?.value ?: false
+        val isBitPerfect = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value ?: false
         val isDsp = !isBitPerfect && dspEnabled
         _audioSnapshot.value = audioOutputManager.currentSnapshot(track, isDsp)
     }
 
     fun forceReloadAudioPipeline() {
-        PlaybackService.instance?.reloadAudioPipeline()
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.reloadAudioPipeline()
         refreshAudioSnapshot()
     }
 
@@ -352,12 +358,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         sleepTimerJob = viewModelScope.launch {
             var remaining = totalMs
-            while (remaining > 0) {
+            while (remaining > 0 && isActive) {
                 delay(1000)
                 remaining -= 1000
                 _sleepTimerRemainingMs.value = remaining
             }
-            if (isPlaying.value) {
+            if (remaining <= 0 && isPlaying.value) {
                 togglePlayPause()
             }
             _sleepTimerRemainingMs.value = 0L
@@ -397,10 +403,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         sleepTimerJob?.cancel()
-        runCatching {
-            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
-        }
         musicController.release()
         // Only release UI's own fallback output manager; never release PlaybackService's active manager!
         fallbackOutputManager.release()

@@ -219,7 +219,7 @@ object BitPerfectVerifier {
         }
 
         // 20. PEQ / AutoEQ is disabled
-        val autoEqActive = PlaybackService.instance?.autoEqEngine?.isAutoEqEnabled?.value == true
+        val autoEqActive = com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine?.isAutoEqEnabled?.value == true
         val peqActive = dspProcessor != null && dspProcessor.isEqActive
         val peqDisabled = !autoEqActive && !peqActive
         evidence.add(BitPerfectEvidence("PEQ Disabled", peqDisabled, EvidenceSource.OBOE_STREAM))

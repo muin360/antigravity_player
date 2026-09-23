@@ -16,7 +16,7 @@ object AudioVerificationEngine {
         dspProcessor: Audiophile64BitDspProcessor? = null
     ): CanonicalAudioRuntimeSnapshot {
         val isBitPerfectRequested = !isDspActive && (
-            (PlaybackService.instance?.bitPerfectMode?.value == true) ||
+            (com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value == true) ||
             (dspProcessor?.isBitPerfectBypass == true)
         )
         val hardwareReport = HardwareHiFiVerifier.probeHardwareState(context, trackInfo.sampleRateHz, trackInfo.bitDepth, isBitPerfectRequested)
@@ -239,8 +239,8 @@ object AudioVerificationEngine {
             limitations = hardwareReport.limitations
         )
 
-        val bitPerfectSettingRequested = PlaybackService.instance?.bitPerfectMode?.value ?: AudioEngine.bitPerfectRequested.value
-        val hrtfEnabled = PlaybackService.instance?.equalizerEngine?.hrtfSpatialEnabled?.value ?: false
+        val bitPerfectSettingRequested = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value ?: AudioEngine.bitPerfectRequested.value
+        val hrtfEnabled = com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine?.hrtfSpatialEnabled?.value ?: false
         val verificationResult = BitPerfectVerifier.verify(
             snapshot = preliminarySnapshot,
             dspProcessor = dspProcessor,

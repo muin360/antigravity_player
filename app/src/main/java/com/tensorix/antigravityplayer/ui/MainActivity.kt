@@ -394,7 +394,7 @@ fun MainAppScreen(
                     isBitPerfectMode = isBitPerfectMode,
                     isSampleRateMatching = isSampleRateMatching,
                     isAudioAuxEnabled = isAudioAuxEnabled,
-                    hifiProfileManager = PlaybackService.instance?.hifiProfileManager,
+                    hifiProfileManager = com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager,
                     audioSnapshot = audioSnapshot,
                     onScanLibrary = { viewModel.scanLibrary() },
                     onHiFiToggle = { viewModel.setHiFiAudioSinkEnabled(it) },

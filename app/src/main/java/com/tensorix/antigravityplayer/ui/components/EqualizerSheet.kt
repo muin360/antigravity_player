@@ -109,7 +109,7 @@ fun EqualizerSheet(
     val hrtfSpatialEnabled by equalizerEngine.hrtfSpatialEnabled.collectAsStateWithLifecycle()
     val hrtfRoomSize by equalizerEngine.hrtfRoomSize.collectAsStateWithLifecycle()
 
-    val autoEqEngine = PlaybackService.instance?.autoEqEngine
+    val autoEqEngine = com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine
     val activeAutoEqProfile by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.activeProfile, null)
     val isAutoEqEnabled by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.isAutoEqEnabled, false)
     var autoEqDialogExpanded by remember { mutableStateOf(false) }
@@ -262,7 +262,7 @@ fun EqualizerSheet(
                                 }
                             }
                             Text(
-                                text = if (isAutoEqEnabled && activeAutoEqProfile != null) activeAutoEqProfile!!.displayName else "Tap to Calibrate Audiophile Headphones",
+                                text = if (isAutoEqEnabled && activeAutoEqProfile != null) activeAutoEqProfile?.displayName ?: "Unknown Profile" else "Tap to Calibrate Audiophile Headphones",
                                 color = if (isAutoEqEnabled && activeAutoEqProfile != null) TextPrimary else TextSecondary,
                                 fontSize = 13.sp,
                                 fontWeight = if (isAutoEqEnabled && activeAutoEqProfile != null) FontWeight.SemiBold else FontWeight.Normal

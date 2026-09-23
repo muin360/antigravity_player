@@ -100,23 +100,23 @@ class PlaybackService : MediaSessionService() {
     private var bitPerfectReceiver: BroadcastReceiver? = null
     private var becomingNoisyReceiver: BroadcastReceiver? = null
 
-    private val _hiFiEnabled = MutableStateFlow(true)
-    val hiFiEnabled: StateFlow<Boolean> = _hiFiEnabled.asStateFlow()
+    val hiFiEnabled = com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled //(true)
+    
 
-    private val _bitPerfectMode = MutableStateFlow(false)
-    val bitPerfectMode: StateFlow<Boolean> = _bitPerfectMode.asStateFlow()
+    val bitPerfectMode = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode //(false)
+    
 
-    private val _sampleRateMatching = MutableStateFlow(true)
-    val sampleRateMatching: StateFlow<Boolean> = _sampleRateMatching.asStateFlow()
+    val sampleRateMatching = com.tensorix.antigravityplayer.audio.AudioEngineProvider.sampleRateMatching //(true)
+    
 
-    private val _audioAuxEnabled = MutableStateFlow(true)
-    val audioAuxEnabled: StateFlow<Boolean> = _audioAuxEnabled.asStateFlow()
+    val audioAuxEnabled = com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioAuxEnabled //(true)
+    
 
-    private val _oboeMode = MutableStateFlow("UNAVAILABLE")
-    val oboeMode: StateFlow<String> = _oboeMode.asStateFlow()
+    val oboeMode = com.tensorix.antigravityplayer.audio.AudioEngineProvider.oboeMode //("UNAVAILABLE")
+    
 
-    private val _autoProfileSwitch = MutableStateFlow(true)
-    val autoProfileSwitch: StateFlow<Boolean> = _autoProfileSwitch.asStateFlow()
+    val autoProfileSwitch = com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoProfileSwitch //(true)
+    
 
     private val _currentTrackInfo = MutableStateFlow(AudioTrackInfo())
     val currentTrackInfo: StateFlow<AudioTrackInfo> = _currentTrackInfo.asStateFlow()
@@ -169,17 +169,30 @@ class PlaybackService : MediaSessionService() {
         }
 
         // Retain settings from preferences
-        _hiFiEnabled.value = audioPrefs.getBoolean("hi_fi_enabled", true)
-        _bitPerfectMode.value = audioPrefs.getBoolean("bit_perfect_mode", false)
-        _sampleRateMatching.value = audioPrefs.getBoolean("sample_rate_matching", true)
-        _audioAuxEnabled.value = audioPrefs.getBoolean("audio_aux_enabled", true)
-        _autoProfileSwitch.value = audioPrefs.getBoolean("auto_profile_switch", true)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value = audioPrefs.getBoolean("hi_fi_enabled", true)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value = audioPrefs.getBoolean("bit_perfect_mode", false)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.sampleRateMatching.value = audioPrefs.getBoolean("sample_rate_matching", true)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioAuxEnabled.value = audioPrefs.getBoolean("audio_aux_enabled", true)
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoProfileSwitch.value = audioPrefs.getBoolean("auto_profile_switch", true)
 
-        dspProcessor.isBitPerfectBypass = _bitPerfectMode.value
-        dspProcessor.isEnabled = !_bitPerfectMode.value
-        dspProcessor.isTurboMode = _hiFiEnabled.value
+        dspProcessor.isBitPerfectBypass = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value
+        dspProcessor.isEnabled = !com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value
+        dspProcessor.isTurboMode = com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value
 
-        equalizerEngine?.setBitPerfectBypass(_bitPerfectMode.value)
+        equalizerEngine?.setBitPerfectBypass(com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value)
+        
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager = audioOutputManager
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine = equalizerEngine
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine = autoEqEngine
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor = dspProcessor
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager = hifiProfileManager
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine = dynamicProfileEngine
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.commandHandler = { cmd, arg ->
+            when (cmd) {
+                "RELOAD_PIPELINE" -> reloadAudioPipeline()
+            }
+        }
+
         refreshAudiophileState()
 
         val bitPerfectFilter = IntentFilter("com.tensorix.antigravityplayer.SET_BIT_PERFECT")
@@ -207,7 +220,7 @@ class PlaybackService : MediaSessionService() {
         }
         val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(becomingNoisyReceiver, noisyFilter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(becomingNoisyReceiver, noisyFilter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(becomingNoisyReceiver, noisyFilter)
@@ -221,7 +234,7 @@ class PlaybackService : MediaSessionService() {
             private var lastSentDvc = -1.0
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == "android.media.VOLUME_CHANGED_ACTION") {
-                    if (_bitPerfectMode.value) return
+                    if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value) return
                     val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                     val dvcVol = (currentVolume.toDouble() / maxVolume.toDouble().coerceAtLeast(1.0)).coerceIn(0.0, 1.0)
@@ -244,7 +257,7 @@ class PlaybackService : MediaSessionService() {
         }
         val volFilter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(volumeReceiver, volFilter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(volumeReceiver, volFilter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(volumeReceiver, volFilter)
@@ -296,7 +309,7 @@ class PlaybackService : MediaSessionService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .apply {
-                if (_hiFiEnabled.value) {
+                if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value) {
                     @Suppress("WrongConstant")
                     setFlags(0x100)
                 }
@@ -313,11 +326,11 @@ class PlaybackService : MediaSessionService() {
             ): AudioSink {
                 return try {
                     val currentConfig = outputConfigManager?.getConfigForDevice(activeRouteType) ?: OutputDeviceConfig()
-                    val isBitPerfect = _bitPerfectMode.value
+                    val isBitPerfect = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value
 
-                    Log.d("AntigravityAudioAudit", "Building Sink: activeRoute=$activeRouteType, bitPerfect=$isBitPerfect, hiFiEnabled=${_hiFiEnabled.value}")
+                    Log.d("AntigravityAudioAudit", "Building Sink: activeRoute=$activeRouteType, bitPerfect=$isBitPerfect, hiFiEnabled=${com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value}")
 
-                    if (_hiFiEnabled.value && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
+                    if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value && com.tensorix.antigravityplayer.audio.OboeBridge.isAvailable) {
                         try {
                             Log.i("AntigravityAudioAudit", "Using OboeAudioSink for High-Performance path (Bit-Perfect: $isBitPerfect)")
                             val sink = com.tensorix.antigravityplayer.audio.OboeAudioSink(
@@ -325,7 +338,7 @@ class PlaybackService : MediaSessionService() {
                                 dspProcessor = dspProcessor,
                                 equalizerEngine = equalizerEngine,
                                 bitPerfectMode = isBitPerfect,
-                                sampleRateMatchingInitial = _sampleRateMatching.value
+                                sampleRateMatchingInitial = com.tensorix.antigravityplayer.audio.AudioEngineProvider.sampleRateMatching.value
                             )
                             activeOboeAudioSink = sink
                             return sink
@@ -336,7 +349,7 @@ class PlaybackService : MediaSessionService() {
                         activeOboeAudioSink = null
                     }
 
-                    dspProcessor.isTurboMode = _hiFiEnabled.value
+                    dspProcessor.isTurboMode = com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value
                     
                     if (isBitPerfect) {
                         dspProcessor.ditherStrength = 0.0
@@ -350,7 +363,7 @@ class PlaybackService : MediaSessionService() {
                     val builder = DefaultAudioSink.Builder(context)
                         .setAudioProcessors(if (isBitPerfect) emptyArray() else arrayOf(dspProcessor))
                     
-                    if (!isBitPerfect && _hiFiEnabled.value && isHiFiSupported()) {
+                    if (!isBitPerfect && com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value && isHiFiSupported()) {
                         builder.setEnableFloatOutput(true)
                     } else {
                         builder.setEnableFloatOutput(false)
@@ -399,7 +412,7 @@ class PlaybackService : MediaSessionService() {
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 5_000, 
-                /* maxBufferMs = */ if (_audioAuxEnabled.value) 15_000 else 30_000, 
+                /* maxBufferMs = */ if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioAuxEnabled.value) 15_000 else 30_000, 
                 /* bufferForPlaybackMs = */ 250, 
                 /* bufferForPlaybackAfterRebufferMs = */ 500
             )
@@ -422,10 +435,19 @@ class PlaybackService : MediaSessionService() {
         val currentSessionId = exoPlayer.audioSessionId
         if (currentSessionId != 0) {
             VendorDacManager.onAudioSessionOpened(applicationContext, currentSessionId)
-            if (!_bitPerfectMode.value) {
+            if (!com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value) {
                 equalizerEngine?.attachToAudioSession(currentSessionId)
             } else {
-                equalizerEngine?.release()
+                
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.commandHandler = null
+
+        equalizerEngine?.release()
             }
             logRuntimeAudioDiagnostics(currentSessionId, audioAttributes)
         }
@@ -434,10 +456,19 @@ class PlaybackService : MediaSessionService() {
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 if (audioSessionId != 0) {
                     VendorDacManager.onAudioSessionOpened(applicationContext, audioSessionId)
-                    if (!_bitPerfectMode.value) {
+                    if (!com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value) {
                         equalizerEngine?.attachToAudioSession(audioSessionId)
                     } else {
-                        equalizerEngine?.release()
+                        
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.commandHandler = null
+
+        equalizerEngine?.release()
                     }
                     logRuntimeAudioDiagnostics(audioSessionId, audioAttributes)
                 }
@@ -461,17 +492,17 @@ class PlaybackService : MediaSessionService() {
         // Truthful labelling: these describe the FALLBACK DefaultAudioSink
         // configuration policy. The active native Oboe path always opens
         // Float streams and its real format comes from stream telemetry.
-        val fallbackEncoding = if (!_bitPerfectMode.value && isHiFiSupported()) "ENCODING_PCM_FLOAT (4)" else "ENCODING_PCM_16BIT (2)"
+        val fallbackEncoding = if (!com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value && isHiFiSupported()) "ENCODING_PCM_FLOAT (4)" else "ENCODING_PCM_16BIT (2)"
         val actualChannels = if (trackChannels == 1) "MONO (1)" else "STEREO (2)"
 
         val verifiedReport = HardwareHiFiVerifier.probeHardwareState(
             context = applicationContext,
             trackSampleRate = trackSampleRate,
             trackBitDepth = trackBitDepth,
-            isDspBypassed = _bitPerfectMode.value
+            isDspBypassed = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value
         )
 
-        val isBitPerfect = _bitPerfectMode.value
+        val isBitPerfect = com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value
         val processorsCount = if (isBitPerfect) 0 else 1
         Log.i("AntigravityAudioAudit", "==================== AUDIO RUNTIME DIAGNOSTICS ====================")
         Log.i("AntigravityAudioAudit", "1.  BitPerfect Mode Toggle:        ${if (isBitPerfect) "ENABLED (True)" else "DISABLED (False)"}")
@@ -536,7 +567,7 @@ class PlaybackService : MediaSessionService() {
 
     fun refreshAudiophileState(trackInfo: AudioTrackInfo = _currentTrackInfo.value) {
         val outManager = audioOutputManager ?: return
-        val isDspActive = !_bitPerfectMode.value && (equalizerEngine?.isEnabled?.value == true)
+        val isDspActive = !com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value && (equalizerEngine?.isEnabled?.value == true)
         val snapshot = outManager.currentSnapshot(trackInfo, isDspActive)
         _audiophileSnapshot.value = snapshot
         val activeRoute = snapshot.output.activeRoute
@@ -551,13 +582,13 @@ class PlaybackService : MediaSessionService() {
         }
 
         val streamInfo = com.tensorix.antigravityplayer.audio.OboeAudioSink.currentStreamInfo
-        _oboeMode.value = if (activeOboeAudioSink != null && streamInfo != null) streamInfo.sharingMode else if (OboeBridge.isAvailable) "SHARED" else "UNAVAILABLE"
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.oboeMode.value = if (activeOboeAudioSink != null && streamInfo != null) streamInfo.sharingMode else if (OboeBridge.isAvailable) "SHARED" else "UNAVAILABLE"
         
         // Auto-switch profile and Listening Mode based on dynamic route engine.
         // Phase 13 dedupe: apply ONLY when the effective route type actually
         // changed — playback-state transitions (buffering/ready/ended) must not
         // rewrite EQ prefs or re-drive the DSP sync pipeline.
-        if (_autoProfileSwitch.value) {
+        if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoProfileSwitch.value) {
             val activeRoute = snapshot.output.activeRoute?.routeType ?: AudioOutputRouteType.SPEAKER
             if (activeRoute != lastAutoAppliedRoute) {
                 lastAutoAppliedRoute = activeRoute
@@ -622,8 +653,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setHiFiEnabled(enabled: Boolean) {
-        if (_hiFiEnabled.value == enabled) return
-        _hiFiEnabled.value = enabled
+        if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value == enabled) return
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hiFiEnabled.value = enabled
         audioPrefs.edit { putBoolean("hi_fi_enabled", enabled) }
         dspProcessor.isTurboMode = enabled
         AudioEngine.invalidate()
@@ -632,7 +663,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setBitPerfectMode(enabled: Boolean) {
-        _bitPerfectMode.value = enabled
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value = enabled
         audioPrefs.edit().putBoolean("bit_perfect_mode", enabled).apply()
         Log.i("HiFiPlayer", "Bit-Perfect Mode changed: $enabled")
         equalizerEngine?.setBitPerfectBypass(enabled)
@@ -642,7 +673,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setSampleRateMatching(enabled: Boolean) {
-        _sampleRateMatching.value = enabled
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.sampleRateMatching.value = enabled
         activeOboeAudioSink?.setSampleRateMatching(enabled)
         audioPrefs.edit().putBoolean("sample_rate_matching", enabled).apply()
         Log.i("HiFiPlayer", "Sample Rate Matching changed: $enabled")
@@ -651,14 +682,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     fun setAudioAuxEnabled(enabled: Boolean) {
-        _audioAuxEnabled.value = enabled
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioAuxEnabled.value = enabled
         audioPrefs.edit().putBoolean("audio_aux_enabled", enabled).apply()
         AudioEngine.invalidate()
         refreshAudiophileState()
     }
 
     fun setAutoProfileSwitch(enabled: Boolean) {
-        _autoProfileSwitch.value = enabled
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoProfileSwitch.value = enabled
         audioPrefs.edit().putBoolean("auto_profile_switch", enabled).apply()
         refreshAudiophileState()
     }
@@ -690,6 +721,15 @@ class PlaybackService : MediaSessionService() {
         }
         volumeReceiver = null
         
+        
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine = null
+        com.tensorix.antigravityplayer.audio.AudioEngineProvider.commandHandler = null
+
         equalizerEngine?.release()
         equalizerEngine = null
         audioOutputManager?.release()

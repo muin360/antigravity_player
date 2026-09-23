@@ -16,6 +16,7 @@ import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Multi-band Parametric Equalizer engine wrapping Android native AudioEffect APIs.
@@ -34,10 +35,10 @@ class EqualizerEngine(private val context: Context) {
 
     private var currentAudioSessionId: Int = 0
 
-    private val _isEnabled = MutableStateFlow(prefs.getBoolean("eq_enabled", true))
+    private val _isEnabled = MutableStateFlow(true)
     val isEnabled: StateFlow<Boolean> = _isEnabled.asStateFlow()
 
-    private val _isBitPerfectBypass = MutableStateFlow(prefs.getBoolean("bit_perfect_bypass", false))
+    private val _isBitPerfectBypass = MutableStateFlow(false)
     val isBitPerfectBypass: StateFlow<Boolean> = _isBitPerfectBypass.asStateFlow()
 
     private val _bandCount = MutableStateFlow(10) // Always 10 for Audiophile DSP
@@ -63,54 +64,54 @@ class EqualizerEngine(private val context: Context) {
     private val _trebleStrength = MutableStateFlow<Short>(prefs.getInt("treble_strength", 0).toShort())
     val trebleStrength: StateFlow<Short> = _trebleStrength.asStateFlow()
 
-    private val _replayGainEnabled = MutableStateFlow(prefs.getBoolean("replay_gain_enabled", true))
+    private val _replayGainEnabled = MutableStateFlow(true)
     val replayGainEnabled: StateFlow<Boolean> = _replayGainEnabled.asStateFlow()
 
-    private val _preAmpGainDb = MutableStateFlow<Float>(prefs.getFloat("pre_amp_db", 0.0f))
+    private val _preAmpGainDb = MutableStateFlow<Float>(0.0f)
     val preAmpGainDb: StateFlow<Float> = _preAmpGainDb.asStateFlow()
 
-    private val _isTurboSharpness = MutableStateFlow(prefs.getBoolean("turbo_sharpness", true))
+    private val _isTurboSharpness = MutableStateFlow(true)
     val isTurboSharpness: StateFlow<Boolean> = _isTurboSharpness.asStateFlow()
 
-    private val _stereoExpansion = MutableStateFlow<Float>(prefs.getFloat("stereo_expansion", 1.0f))
+    private val _stereoExpansion = MutableStateFlow<Float>(1.0f)
     val stereoExpansion: StateFlow<Float> = _stereoExpansion.asStateFlow()
 
-    private val _limiterThreshold = MutableStateFlow<Float>(prefs.getFloat("limiter_threshold", 0.0f))
+    private val _limiterThreshold = MutableStateFlow<Float>(0.0f)
     val limiterThreshold: StateFlow<Float> = _limiterThreshold.asStateFlow()
 
     // Neutral defaults for fresh installs (existing users keep saved values):
     // a "Flat" configuration must not colour the signal (Phase 15.4).
-    private val _clarityGain = MutableStateFlow<Float>(prefs.getFloat("clarity_gain", 0.0f))
+    private val _clarityGain = MutableStateFlow<Float>(0.0f)
     val clarityGain: StateFlow<Float> = _clarityGain.asStateFlow()
 
-    private val _warmSaturation = MutableStateFlow<Float>(prefs.getFloat("warm_saturation", 0.0f))
+    private val _warmSaturation = MutableStateFlow<Float>(0.0f)
     val warmSaturation: StateFlow<Float> = _warmSaturation.asStateFlow()
 
-    private val _triodeWarmth = MutableStateFlow<Float>(prefs.getFloat("triode_warmth", 0.0f))
+    private val _triodeWarmth = MutableStateFlow<Float>(0.0f)
     val triodeWarmth: StateFlow<Float> = _triodeWarmth.asStateFlow()
 
-    private val _pentodeTape = MutableStateFlow<Float>(prefs.getFloat("pentode_tape", 0.0f))
+    private val _pentodeTape = MutableStateFlow<Float>(0.0f)
     val pentodeTape: StateFlow<Float> = _pentodeTape.asStateFlow()
 
-    private val _airPresence = MutableStateFlow<Float>(prefs.getFloat("air_presence", 0.0f))
+    private val _airPresence = MutableStateFlow<Float>(0.0f)
     val airPresence: StateFlow<Float> = _airPresence.asStateFlow()
 
-    private val _crossfeedLevel = MutableStateFlow<Float>(prefs.getFloat("crossfeed_level", 0.0f))
+    private val _crossfeedLevel = MutableStateFlow<Float>(0.0f)
     val crossfeedLevel: StateFlow<Float> = _crossfeedLevel.asStateFlow()
 
-    private val _channelBalance = MutableStateFlow<Float>(prefs.getFloat("channel_balance", 0.0f))
+    private val _channelBalance = MutableStateFlow<Float>(0.0f)
     val channelBalance: StateFlow<Float> = _channelBalance.asStateFlow()
 
-    private val _invertPhase = MutableStateFlow<Boolean>(prefs.getBoolean("invert_phase", false))
+    private val _invertPhase = MutableStateFlow<Boolean>(false)
     val invertPhase: StateFlow<Boolean> = _invertPhase.asStateFlow()
 
-    private val _subBassMono = MutableStateFlow(prefs.getBoolean("sub_bass_mono", false))
+    private val _subBassMono = MutableStateFlow(false)
     val subBassMono: StateFlow<Boolean> = _subBassMono.asStateFlow()
 
-    private val _hrtfSpatialEnabled = MutableStateFlow(prefs.getBoolean("hrtf_spatial_enabled", false))
+    private val _hrtfSpatialEnabled = MutableStateFlow(false)
     val hrtfSpatialEnabled: StateFlow<Boolean> = _hrtfSpatialEnabled.asStateFlow()
 
-    private val _hrtfRoomSize = MutableStateFlow<Float>(prefs.getFloat("hrtf_room_size", 0.5f))
+    private val _hrtfRoomSize = MutableStateFlow<Float>(0.5f)
     val hrtfRoomSize: StateFlow<Float> = _hrtfRoomSize.asStateFlow()
 
     private val _dvcVolume = MutableStateFlow<Double>(1.0)
@@ -141,6 +142,30 @@ class EqualizerEngine(private val context: Context) {
         )
     )
     val listeningMode: StateFlow<com.tensorix.antigravityplayer.audio.ListeningMode> = _listeningMode.asStateFlow()
+
+
+    init {
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            _isEnabled.value = prefs.getBoolean("eq_enabled", true)
+            _isBitPerfectBypass.value = prefs.getBoolean("bit_perfect_bypass", false)
+            _replayGainEnabled.value = prefs.getBoolean("replay_gain_enabled", true)
+            _preAmpGainDb.value = prefs.getFloat("pre_amp_db", 0.0f)
+            _isTurboSharpness.value = prefs.getBoolean("turbo_sharpness", true)
+            _stereoExpansion.value = prefs.getFloat("stereo_expansion", 1.0f)
+            _limiterThreshold.value = prefs.getFloat("limiter_threshold", 0.0f)
+            _clarityGain.value = prefs.getFloat("clarity_gain", 0.0f)
+            _warmSaturation.value = prefs.getFloat("warm_saturation", 0.0f)
+            _triodeWarmth.value = prefs.getFloat("triode_warmth", 0.0f)
+            _pentodeTape.value = prefs.getFloat("pentode_tape", 0.0f)
+            _airPresence.value = prefs.getFloat("air_presence", 0.0f)
+            _crossfeedLevel.value = prefs.getFloat("crossfeed_level", 0.0f)
+            _channelBalance.value = prefs.getFloat("channel_balance", 0.0f)
+            _invertPhase.value = prefs.getBoolean("invert_phase", false)
+            _subBassMono.value = prefs.getBoolean("sub_bass_mono", false)
+            _hrtfSpatialEnabled.value = prefs.getBoolean("hrtf_spatial_enabled", false)
+            _hrtfRoomSize.value = prefs.getFloat("hrtf_room_size", 0.5f)
+        }
+    }
 
     fun setListeningMode(mode: com.tensorix.antigravityplayer.audio.ListeningMode) {
         _listeningMode.value = mode
@@ -233,7 +258,7 @@ class EqualizerEngine(private val context: Context) {
             if (isBypass) 0.0 else (_bandLevels.value.getOrNull(idx)?.toDouble() ?: 0.0) / 100.0
         }
 
-        val autoEqEngine = PlaybackService.instance?.autoEqEngine
+        val autoEqEngine = com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine
         val isAutoEq = (_isAutoEqEnabled.value || autoEqEngine?.isAutoEqEnabled?.value == true) && !isBypass && isEnabled
         val activeProfile = _autoEqProfile.value ?: autoEqEngine?.activeProfile?.value
         val peqList = if (isAutoEq) {

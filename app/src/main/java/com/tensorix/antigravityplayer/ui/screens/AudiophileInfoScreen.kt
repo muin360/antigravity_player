@@ -99,7 +99,7 @@ fun AudiophileInfoScreen(
     val output = snapshot.output
 
 
-    val dynamicState by com.tensorix.antigravityplayer.ui.components.stableCollect(PlaybackService.instance?.dynamicProfileEngine?.engineState, null)
+    val dynamicState by com.tensorix.antigravityplayer.ui.components.stableCollect(com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine?.engineState, null)
 
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -221,7 +221,7 @@ fun AudiophileInfoScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         // UNIVERSAL HI-FI HARDWARE & 3-MODE STUDIO LISTENING SELECTOR
-        val eqEngine = PlaybackService.instance?.equalizerEngine
+        val eqEngine = com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine
         val currentMode = eqEngine?.listeningMode?.collectAsStateWithLifecycle()?.value ?: com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE
         val canon = snapshot.output.canonicalSnapshot
         val dacName = canon?.dac?.modelName?.value?.takeIf { it.isNotBlank() && !it.contains("Unknown") }
@@ -298,7 +298,7 @@ fun AudiophileInfoScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         // ROON-STYLE GLOWING SIGNAL CHAIN VISUALIZER
-        val autoEqEngine = PlaybackService.instance?.autoEqEngine
+        val autoEqEngine = com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine
         val activeAutoEq by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.activeProfile, null)
         val isAutoEqOn by com.tensorix.antigravityplayer.ui.components.stableCollect(autoEqEngine?.isAutoEqEnabled, false)
 
@@ -362,7 +362,7 @@ fun AudiophileInfoScreen(
                     SignalChainNode(
                         title = "2. Native C++ DSP Engine",
                         details = if (isBitPerfectMode) "Pure Hardware Bypass (Zero DSP Alteration)"
-                                  else if (isAutoEqOn && activeAutoEq != null) "AutoEQ™ Active (${activeAutoEq!!.displayName} • Harman Target)"
+                                  else if (isAutoEqOn && activeAutoEq != null) "AutoEQ™ Active (${activeAutoEq?.displayName ?: "Unknown"} • Harman Target)"
                                   else "64-bit Double Precision Filters • Valve Warmth • Soft-Knee Limiter",
                         badge = if (isBitPerfectMode) "BIT-PERFECT" else if (isAutoEqOn) "AutoEQ" else "DSP 64-BIT",
                         badgeColor = if (isBitPerfectMode) Color(0xFFFFD700) else PrimaryCyan
@@ -616,7 +616,7 @@ fun AudiophileInfoScreen(
                     SpecItem("Bit Depth", if (output.currentPlaybackBitDepth == 32) "32-bit Float" else "${output.currentPlaybackBitDepth}-bit")
                     SpecItem("Buffer Latency", if (output.latencyMs > 0) "${output.latencyMs} ms" else "UNAVAILABLE (HAL)")
                     
-                    val dvcVol = PlaybackService.instance?.dspProcessor?.dvcVolume ?: 1.0
+                    val dvcVol = com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor?.dvcVolume ?: 1.0
                     SpecItem("DVC Unity", String.format(java.util.Locale.US, "%.0f%%", dvcVol * 100))
                     SpecItem("Direct Path", if (hardwareReport.isDirectOutputSupported) "Direct HAL" else "AudioFlinger")
                 }
@@ -1053,7 +1053,7 @@ fun AudiophileInfoScreen(
                     SpecItem("3.5mm Headset", if (hardwareReport.isWiredHeadsetConnected) "CONNECTED" else "UNATTACHED")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                val oboeMode = PlaybackService.instance?.oboeMode?.collectAsStateWithLifecycle()?.value ?: "UNAVAILABLE"
+                val oboeMode = com.tensorix.antigravityplayer.audio.AudioEngineProvider.oboeMode?.collectAsStateWithLifecycle()?.value ?: "UNAVAILABLE"
                 val oboeColor = when (oboeMode) {
                     "EXCLUSIVE" -> Color(0xFF00E676)
                     "SHARED" -> Color(0xFFFFAB00)
@@ -1377,7 +1377,7 @@ private fun LiveTelemetryHUD() {
                 peakR = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakR(handle).toFloat()
                 phaseCorr = com.tensorix.antigravityplayer.audio.OboeBridge.getPhaseCorrelation(handle)
             } else {
-                val dsp = PlaybackService.instance?.dspProcessor
+                val dsp = com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor
                 if (dsp != null) {
                     peakL = dsp.peakL.toFloat()
                     peakR = dsp.peakR.toFloat()
@@ -1416,7 +1416,7 @@ private fun LivePeakText() {
                 peakL = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakL(handle).toFloat()
                 peakR = com.tensorix.antigravityplayer.audio.OboeBridge.getPeakR(handle).toFloat()
             } else {
-                val dsp = PlaybackService.instance?.dspProcessor
+                val dsp = com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor
                 if (dsp != null) {
                     peakL = dsp.peakL.toFloat()
                     peakR = dsp.peakR.toFloat()

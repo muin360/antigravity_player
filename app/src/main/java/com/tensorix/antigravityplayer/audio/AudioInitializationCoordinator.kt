@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelChildren
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -95,6 +96,7 @@ object AudioInitializationCoordinator {
     }
 
     fun shutdown() {
+        scope.coroutineContext.cancelChildren()
         isInitialized.set(false)
         _state.value = AppInitializationState.STARTING
     }

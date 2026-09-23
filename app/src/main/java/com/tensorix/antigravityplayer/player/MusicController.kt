@@ -61,16 +61,18 @@ class MusicController(private val context: Context) {
     private val _queue = MutableStateFlow<List<Song>>(emptyList())
     val queue: StateFlow<List<Song>> = _queue.asStateFlow()
 
-    private var songMap = mutableMapOf<String, Song>()
+    private var songMap = android.util.LruCache<String, Song>(5000)
 
     init {
         initController()
     }
 
+    private var retryJob: Job? = null
     private var initRetries = 0
     private fun initController() {
         if (mediaController != null && mediaController?.isConnected == true) return
         if (controllerFuture != null) return
+        retryJob?.cancel()
 
         // Bound the retry loop: a permanently dead session component must not
         // schedule reconnect attempts forever.
@@ -87,15 +89,18 @@ class MusicController(private val context: Context) {
                 mediaController = controller
                 setupPlayerListener(controller)
                 syncStateFromController(controller)
-                pendingPlayAction?.invoke()
-                pendingPlayAction = null
+                // Bug 19: Validate pendingPlayAction on mock controller
+                if (controller != null && controller.isConnected) {
+                    pendingPlayAction?.invoke()
+                    pendingPlayAction = null
+                }
                 controllerFuture = null
                 initRetries = 0
             } catch (e: Exception) {
                 android.util.Log.w("Antigravity", "Failure in " + javaClass.simpleName, e)
                 controllerFuture = null
                 initRetries++
-                scope.launch {
+                retryJob = scope.launch {
                     delay(2000L * initRetries)
                     initController()
                 }
@@ -255,60 +260,63 @@ class MusicController(private val context: Context) {
             return
         }
 
-        songMap.clear()
-        val mediaItems = songs.map { song ->
-            val idStr = song.id.toString()
-            songMap[idStr] = song
+        scope.launch {
+            val mediaItems = withContext(Dispatchers.Default) {
+                songs.map { song ->
+                    val idStr = song.id.toString()
+                    val artUri = song.albumArtUri?.takeIf { it.isNotBlank() }?.let {
+                        runCatching { Uri.parse(it) }.getOrNull()
+                    }
 
-            val artUri = song.albumArtUri?.takeIf { it.isNotBlank() }?.let {
-                runCatching { Uri.parse(it) }.getOrNull()
+                    val metadata = MediaMetadata.Builder()
+                        .setTitle(song.title)
+                        .setArtist(song.artist)
+                        .setAlbumTitle(song.album)
+                        .setArtworkUri(artUri)
+                        .build()
+
+                    val uri = if (song.filePath.isNotBlank()) songToUri(song) else Uri.EMPTY
+
+                    MediaItem.Builder()
+                        .setMediaId(idStr)
+                        .setUri(uri)
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
             }
+            
+            songMap.evictAll()
+            songs.forEach { songMap.put(it.id.toString(), it) }
+            _queue.value = songs
+            
+            val safeIndex = startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0))
+            runCatching { Log.i("STARTUP_TIMING", "T0: User requested playback for track=${songs.getOrNull(safeIndex)?.title}") }
 
-            val metadata = MediaMetadata.Builder()
-                .setTitle(song.title)
-                .setArtist(song.artist)
-                .setAlbumTitle(song.album)
-                .setArtworkUri(artUri)
-                .build()
-
-            val uri = if (song.filePath.isNotBlank()) songToUri(song) else Uri.EMPTY
-
-            MediaItem.Builder()
-                .setMediaId(idStr)
-                .setUri(uri)
-                .setMediaMetadata(metadata)
-                .build()
+            controller.setMediaItems(mediaItems, safeIndex, 0L)
+            controller.prepare()
+            controller.play()
         }
-
-        _queue.value = songs
-        val safeIndex = startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0))
-        runCatching { Log.i("STARTUP_TIMING", "T0: User requested playback for track=${songs.getOrNull(safeIndex)?.title}") }
-
-        controller.setMediaItems(mediaItems, safeIndex, 0L)
-        controller.prepare()
-        controller.play()
     }
 
-    fun playSong(song: Song, fullList: List<Song> = listOf(song)) {
-        // P0-7: selecting a track that already lives in the current timeline
-        // is a seek, not a queue rebuild (no freeze, no position loss).
-        val existingIndex = _queue.value.indexOfFirst { it.id == song.id }
-        if (existingIndex >= 0) {
+    fun playSong(song: Song, fullList: List<Song> = listOf(song), requestedIndex: Int = -1) {
+        val index = if (requestedIndex >= 0 && requestedIndex < fullList.size && fullList[requestedIndex].id == song.id) requestedIndex 
+                    else fullList.indexOfFirst { it.id == song.id }.let { if (it == -1) 0 else it }
+        val isFullListSame = isSameQueue(fullList)
+
+        if (isFullListSame) {
             val controller = mediaController
             if (controller != null && controller.isConnected) {
-                val isCurrent = controller.currentMediaItem?.mediaId == song.id.toString()
+                val isCurrent = controller.currentMediaItemIndex == index
                 if (isCurrent) {
-                    // Same track clicked again: restart it without touching the queue.
                     controller.seekTo(0L)
                     controller.play()
                     _currentPositionMs.value = 0L
                     return
                 }
-                selectTimelineItem(controller, existingIndex, startAtZero = true)
+                selectTimelineItem(controller, index, startAtZero = true)
                 return
             }
         }
-        val index = fullList.indexOfFirst { it.id == song.id }.let { if (it == -1) 0 else it }
         playPlaylist(fullList, index)
     }
 
@@ -344,7 +352,7 @@ class MusicController(private val context: Context) {
 
         currentList.add(insertIndex, song)
         _queue.value = currentList
-        songMap[song.id.toString()] = song
+        songMap.put(song.id.toString(), song)
 
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title)
@@ -369,7 +377,7 @@ class MusicController(private val context: Context) {
         val currentList = _queue.value.toMutableList()
         currentList.add(song)
         _queue.value = currentList
-        songMap[song.id.toString()] = song
+        songMap.put(song.id.toString(), song)
 
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title)
@@ -455,9 +463,7 @@ class MusicController(private val context: Context) {
 
     fun toggleShuffle() {
         val controller = mediaController ?: return
-        val newState = !controller.shuffleModeEnabled
-        controller.shuffleModeEnabled = newState
-        _shuffleEnabled.value = newState
+        controller.shuffleModeEnabled = !controller.shuffleModeEnabled
     }
 
     fun toggleRepeat() {
@@ -521,7 +527,33 @@ class MusicController(private val context: Context) {
                 } else null
             }
         }.getOrNull() ?: return ReplayGainTags()
-        val text = String(bytes, Charsets.ISO_8859_1)
+        // Memory Bloat fix: Scan for 'REPLAYGAIN' directly in bytes to avoid allocating 1MB String
+        val searchSeq = "REPLAYGAIN".toByteArray(Charsets.ISO_8859_1)
+        var foundIdx = -1
+        for (i in 0 until bytes.size - searchSeq.size) {
+            var match = true
+            for (j in searchSeq.indices) {
+                if (bytes[i + j].toInt() != searchSeq[j].toInt() && 
+                    bytes[i + j].toInt() != (searchSeq[j].toInt() + 32)) { // case insensitive approx
+                    match = false
+                    break
+                }
+            }
+            if (match) {
+                foundIdx = i
+                break
+            }
+        }
+        
+        val text = if (foundIdx >= 0) {
+            // Found something like ReplayGain, just decode the chunk around it (e.g. 2000 bytes)
+            val start = maxOf(0, foundIdx - 1000)
+            val length = minOf(bytes.size - start, 3000)
+            String(bytes, start, length, Charsets.ISO_8859_1)
+        } else {
+            "" // No ReplayGain tags found
+        }
+        
         return ReplayGainTags(
             trackGainDb = extractReplayGainValue(text, listOf("REPLAYGAIN_TRACK_GAIN", "TXXX:REPLAYGAIN_TRACK_GAIN")),
             albumGainDb = extractReplayGainValue(text, listOf("REPLAYGAIN_ALBUM_GAIN", "TXXX:REPLAYGAIN_ALBUM_GAIN")),

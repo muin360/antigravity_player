@@ -1086,7 +1086,7 @@ class OboeAudioSink(
     }
 
     private fun syncDspParameters(handle: Long) {
-        val eq = PlaybackService.instance?.equalizerEngine
+        val eq = com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine
         if (eq != null) {
             eq.syncWithNativeDsp(handle)
         } else {

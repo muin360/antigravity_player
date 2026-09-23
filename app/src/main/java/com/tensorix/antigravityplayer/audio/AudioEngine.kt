@@ -50,7 +50,7 @@ object AudioEngine {
     fun getBitPerfectState(): BitPerfectState = _bitPerfectState.value
 
     fun updateSnapshot(context: Context, trackInfo: AudioTrackInfo, isDspActive: Boolean) {
-        val outputManager = com.tensorix.antigravityplayer.player.PlaybackService.instance?.audioOutputManager
+        val outputManager = com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager
         val state = outputManager?.scanOutputState(trackInfo, isDspActive)
         _snapshot.value = state?.canonicalSnapshot
         state?.canonicalSnapshot?.let { canon ->
