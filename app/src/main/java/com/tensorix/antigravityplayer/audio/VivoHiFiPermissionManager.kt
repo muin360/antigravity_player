@@ -1,5 +1,6 @@
 package com.tensorix.antigravityplayer.audio
 
+import androidx.core.net.toUri
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -26,7 +27,7 @@ object VivoHiFiPermissionManager {
         if (!hasWriteSettingsPermission(activity)) {
             try {
                 val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
-                    data = Uri.parse("package:${activity.packageName}")
+                    data = "package:${activity.packageName}".toUri()
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 activity.startActivity(intent)

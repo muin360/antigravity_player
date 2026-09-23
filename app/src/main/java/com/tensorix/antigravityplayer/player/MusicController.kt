@@ -1,5 +1,6 @@
 package com.tensorix.antigravityplayer.player
 
+import androidx.core.net.toUri
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
@@ -146,7 +147,7 @@ class MusicController(private val context: Context) {
         if (path.isBlank()) return Uri.EMPTY
         return runCatching {
             when {
-                path.startsWith("content://") || path.startsWith("http://") || path.startsWith("https://") -> Uri.parse(path)
+                path.startsWith("content://") || path.startsWith("http://") || path.startsWith("https://") -> path.toUri()
                 path.startsWith("file://") -> Uri.parse(path)
                 else -> Uri.fromFile(java.io.File(path))
             }
@@ -500,7 +501,7 @@ class MusicController(private val context: Context) {
         // both without ever loading a full lossless track into memory.
         val bytes = runCatching {
             if (path.startsWith("content://")) {
-                val uri = Uri.parse(path)
+                val uri = path.toUri()
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val maxBytes = 1024 * 1024
                     val buf = ByteArray(maxBytes)

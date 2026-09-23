@@ -311,8 +311,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     private val subBassFilterR = BiquadFilter()
 
     // Waveshaping interpolation history
-    private val osSamplesL = DoubleArray(4) { 0.0 }
-    private val osSamplesR = DoubleArray(4) { 0.0 }
+    private val osSamplesL = DoubleArray(4)
+    private val osSamplesR = DoubleArray(4)
 
     private var rngState: Long = System.nanoTime()
 

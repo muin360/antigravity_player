@@ -459,16 +459,7 @@ class PlaybackService : MediaSessionService() {
                     if (!com.tensorix.antigravityplayer.audio.AudioEngineProvider.bitPerfectMode.value) {
                         equalizerEngine?.attachToAudioSession(audioSessionId)
                     } else {
-                        
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioOutputManager = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.equalizerEngine = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.autoEqEngine = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dspProcessor = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.hifiProfileManager = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.dynamicProfileEngine = null
-        com.tensorix.antigravityplayer.audio.AudioEngineProvider.commandHandler = null
-
-        equalizerEngine?.release()
+                        equalizerEngine?.release()
                     }
                     logRuntimeAudioDiagnostics(audioSessionId, audioAttributes)
                 }

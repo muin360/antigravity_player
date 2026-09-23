@@ -504,6 +504,7 @@ fun MainAppScreen(
     }
 }
 
+@android.annotation.SuppressLint("NonObservableLocale")
 @Composable
 fun SleepTimerDialog(
     remainingMs: Long,

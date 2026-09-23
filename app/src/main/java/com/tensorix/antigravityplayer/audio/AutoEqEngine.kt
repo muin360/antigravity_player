@@ -44,8 +44,7 @@ class AutoEqEngine(private val context: Context) {
     fun applyProfile(profile: AutoEqProfile, equalizerEngine: EqualizerEngine?) {
         _activeProfile.value = profile
         _isAutoEqEnabled.value = true
-        prefs.edit()
-            .putString(PREFS_KEY_ACTIVE_PROFILE_ID, profile.id)
+        prefs.edit().putString(PREFS_KEY_ACTIVE_PROFILE_ID, profile.id)
             .putBoolean("auto_eq_enabled", true)
             .apply()
 
@@ -70,8 +69,7 @@ class AutoEqEngine(private val context: Context) {
     fun clearProfile(equalizerEngine: EqualizerEngine?) {
         _activeProfile.value = null
         _isAutoEqEnabled.value = false
-        prefs.edit()
-            .remove(PREFS_KEY_ACTIVE_PROFILE_ID)
+        prefs.edit().remove(PREFS_KEY_ACTIVE_PROFILE_ID)
             .putBoolean("auto_eq_enabled", false)
             .apply()
 

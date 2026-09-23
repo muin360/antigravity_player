@@ -836,6 +836,10 @@ class OboeAudioSink(
         return fallbackSink?.getSkipSilenceEnabled() ?: skipSilenceEnabled
     }
 
+    override fun getAudioTrackBufferSizeUs(): Long {
+        return androidx.media3.common.C.TIME_UNSET
+    }
+
     override fun setAudioAttributes(audioAttributes: AudioAttributes) {
         if (this.audioAttributes == audioAttributes) return
         this.audioAttributes = audioAttributes

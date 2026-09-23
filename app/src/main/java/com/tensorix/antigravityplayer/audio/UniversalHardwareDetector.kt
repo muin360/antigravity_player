@@ -65,7 +65,7 @@ class UniversalHardwareDetector(private val context: Context) {
     fun detectActiveOutputDevice(): OutputDeviceSnapshot {
         val am = audioManager ?: return OutputDeviceSnapshot("UNKNOWN", "Unknown Audio Endpoint", isWired = false, isBluetooth = false, isUsb = false)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (true) {
             val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             
             // Priority 1: USB DAC

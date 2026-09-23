@@ -164,7 +164,7 @@ data class AuthoritativeDspConfig(
      * Builds the 27 double parameters array for C++ AudiophileDsp batch publication.
      */
     fun toNativeDoubleParams(): DoubleArray {
-        val p = DoubleArray(27) { 0.0 }
+        val p = DoubleArray(27)
         if (isBitPerfectBypass) {
             p[5] = 1.0 // stereoExpansionMultiplier
             p[6] = 1.0 // dvcVolume

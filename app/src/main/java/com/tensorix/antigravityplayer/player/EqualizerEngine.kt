@@ -347,7 +347,7 @@ class EqualizerEngine(private val context: Context) {
         dsp: Audiophile64BitDspProcessor?,
         eqBands: DoubleArray
     ): DoubleArray {
-        val doubleParams = DoubleArray(NATIVE_DSP_PARAM_COUNT) { 0.0 }
+        val doubleParams = DoubleArray(NATIVE_DSP_PARAM_COUNT)
         doubleParams[0] = if (isBypass) 0.0 else _preAmpGainDb.value.toDouble()
         doubleParams[1] = if (isBypass) 0.0 else (_bassBoostStrength.value.toDouble() / 1000.0) * 15.0
         doubleParams[2] = if (isBypass) 0.0 else (_trebleStrength.value.toDouble() / 1500.0) * 15.0

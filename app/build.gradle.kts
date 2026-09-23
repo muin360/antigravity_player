@@ -87,6 +87,11 @@ android {
             useLegacyPackaging = true
         }
     }
+    
+    lint {
+        disable.add("UnusedResources")
+        disable.add("PluralsCandidate")
+    }
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
@@ -113,30 +118,30 @@ android {
 
 dependencies {
     // Core / Compose
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.core:core-splashscreen:1.0.1")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.compose.ui:ui:1.6.8")
-    implementation("androidx.compose.ui:ui-graphics:1.6.8")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.6.8")
-    implementation("androidx.compose.material3:material3:1.2.1")
-    implementation("androidx.compose.material:material-icons-extended:1.6.8")
+    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.core:core-splashscreen:1.2.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.compose.ui:ui:1.12.1")
+    implementation("androidx.compose.ui:ui-graphics:1.12.1")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.12.1")
+    implementation("androidx.compose.material3:material3:1.4.0")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
     // navigation-compose removed: app uses a tab-switch pattern; the
     // dependency was declared but no NavHost/NavController exists.
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
 
     // Image loading
-    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
 
     // Oboe for direct hardware DAC access (16 KB page-aligned for Android 15+)
-    implementation("com.google.oboe:oboe:1.9.3")
+    implementation("com.google.oboe:oboe:1.11.0")
 
     // Media3 / ExoPlayer -> player engine + session + custom DSP
     // (media3-ui / rtsp were unused and removed)
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-session:1.3.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
     // implementation("androidx.media3:media3-exoplayer-ffmpeg:1.3.1") // Requires manual JNI build for most devices
     
     // External high-performance decoder support via MediaCodec hardening
@@ -144,14 +149,14 @@ dependencies {
 
     // Room DB -> Phase 1 (library)
     // Schema JSONs are exported to app/schemas for versioned migration tests.
-    implementation("androidx.room:room-runtime:2.7.0-alpha13")
-    implementation("androidx.room:room-ktx:2.7.0-alpha13")
-    ksp("androidx.room:room-compiler:2.7.0-alpha13")
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
 
 
 
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

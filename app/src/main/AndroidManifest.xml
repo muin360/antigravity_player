@@ -25,7 +25,6 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
     <application
-        android:enableOnBackInvokedCallback="true"
         android:name=".AntigravityApp"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"

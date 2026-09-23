@@ -1,5 +1,6 @@
 package com.tensorix.antigravityplayer.ui.components
 
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,7 +39,7 @@ fun SongInfoDialog(
 ) {
     if (song == null) return
 
-    val uri = runCatching { Uri.parse(song.filePath) }.getOrNull()
+    val uri = runCatching { song.filePath.toUri() }.getOrNull()
     val isFileUri = uri?.scheme == null || uri.scheme == "file"
     val file = if (isFileUri) File(uri?.path ?: song.filePath) else null
     val fileExtension = when {

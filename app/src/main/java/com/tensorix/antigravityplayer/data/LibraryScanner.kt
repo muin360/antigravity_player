@@ -1,5 +1,6 @@
 package com.tensorix.antigravityplayer.data
 
+import androidx.core.net.toUri
 import android.content.ContentUris
 import android.content.Context
 import android.media.MediaMetadataRetriever
@@ -60,6 +61,7 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
         var querySucceeded = false
+        @android.annotation.SuppressLint("Recycle")
         val cursor = try {
             val c = context.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -152,7 +154,7 @@ class LibraryScanner(private val context: Context, private val songDao: SongDao)
                     val retriever = MediaMetadataRetriever()
                     try {
                         if (playUri.startsWith("content://")) {
-                            retriever.setDataSource(context, Uri.parse(playUri))
+                            retriever.setDataSource(context, playUri.toUri())
                         } else {
                             retriever.setDataSource(playUri)
                         }

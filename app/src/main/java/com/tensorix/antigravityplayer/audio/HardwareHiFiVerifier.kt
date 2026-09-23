@@ -257,7 +257,7 @@ object HardwareHiFiVerifier {
 
     private fun checkWiredHeadset(audioManager: AudioManager?): Boolean {
         if (audioManager == null) return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (true) {
             val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             return devices.any { 
                 it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || 

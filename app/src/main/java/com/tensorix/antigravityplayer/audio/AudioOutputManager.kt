@@ -66,7 +66,7 @@ class AudioOutputManager(
             val newState = scanOutputStateInternal()
             _outputState.value = newState
 
-            val activeDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val activeDevice = if (true) {
                 val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
                 val targetType = newState.activeRoute?.routeType
                 outputDevices.firstOrNull { it.toRouteType() == targetType }
@@ -82,7 +82,7 @@ class AudioOutputManager(
         }
     }
 
-    private val deviceCallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+    private val deviceCallback = if (true) {
         object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
                 onRouteEvent()
@@ -124,7 +124,7 @@ class AudioOutputManager(
     }
 
     private fun updateCache() {
-        cachedRoutes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        cachedRoutes = if (true) {
             audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
                 .filter { it.isSink }
                 .map { device -> device.toCapability() }
@@ -207,7 +207,7 @@ class AudioOutputManager(
                     val deviceClass = device.deviceClass
                     val deviceSubclass = device.deviceSubclass
 
-                    val audioDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val audioDevices = if (true) {
                         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
                     } else emptyArray()
 
@@ -323,7 +323,7 @@ class AudioOutputManager(
         // opaque AAudio handles are NOT type bitmasks, and a lone non-speaker
         // sink is NOT proof of the active route (principles 13/16).
         val nativeInfo = OboeAudioSink.currentStreamInfo
-        val activeDevice: AudioDeviceInfo? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val activeDevice: AudioDeviceInfo? = if (true) {
             val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
             if (nativeInfo != null && nativeInfo.deviceId > 0) {
                 outputDevices.firstOrNull { it.id == nativeInfo.deviceId }
@@ -519,9 +519,9 @@ class AudioOutputManager(
     }
 
     private fun AudioDeviceInfo.toCapability(): AudioRouteCapability {
-        val encodings = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) this.encodings.toList() else emptyList()
-        val sampleRates = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) this.sampleRates.toList() else emptyList()
-        val channelCounts = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) this.channelCounts.toList() else emptyList()
+        val encodings = if (true) this.encodings.toList() else emptyList()
+        val sampleRates = if (true) this.sampleRates.toList() else emptyList()
+        val channelCounts = if (true) this.channelCounts.toList() else emptyList()
 
         val routeType = toRouteType()
         val directSupport = when (routeType) {

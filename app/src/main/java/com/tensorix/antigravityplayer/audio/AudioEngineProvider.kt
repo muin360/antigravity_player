@@ -8,6 +8,8 @@ import com.tensorix.antigravityplayer.player.PlaybackService
  * Global provider for core audio engine components.
  * Decouples the UI and peripheral engines from the PlaybackService lifecycle.
  */
+@android.annotation.SuppressLint("StaticFieldLeak")
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object AudioEngineProvider {
     var audioOutputManager: AudioOutputManager? = null
     var equalizerEngine: EqualizerEngine? = null

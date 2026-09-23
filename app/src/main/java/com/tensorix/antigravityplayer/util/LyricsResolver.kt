@@ -1,5 +1,6 @@
 package com.tensorix.antigravityplayer.util
 
+import androidx.core.net.toUri
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
@@ -20,7 +21,7 @@ object LyricsResolver {
     const val MAX_LRC_SIZE_BYTES = 2L * 1024 * 1024 // 2MB
 
     internal var uriParser: (String) -> Uri? = {
-        runCatching { Uri.parse(it) }.getOrNull()
+        runCatching { it.toUri() }.getOrNull()
     }
 
     fun resolveLrc(context: Context?, song: Song): List<LrcLine> {
@@ -125,8 +126,7 @@ object LyricsResolver {
                 val lrcName = displayName.substringBeforeLast('.') + ".lrc"
                 val commonStorageRoots = listOf(
                     android.os.Environment.getExternalStorageDirectory(),
-                    File("/storage/emulated/0"),
-                    File("/sdcard")
+                    File("/storage/emulated/0")
                 )
                 for (root in commonStorageRoots) {
                     val candidate = File(File(root, relativePath), lrcName)

@@ -45,8 +45,7 @@ class AudioOutputConfigManager private constructor(context: Context) {
 
     fun saveConfigForDevice(routeType: AudioOutputRouteType, config: OutputDeviceConfig) {
         val prefix = routeType.name.lowercase()
-        prefs.edit()
-            .putString("${prefix}_api", config.api.name)
+        prefs.edit().putString("${prefix}_api", config.api.name)
             .putInt("${prefix}_sample_rate", config.sampleRate)
             .putInt("${prefix}_bit_depth", config.bitDepth)
             .putInt("${prefix}_buffer_mult", config.bufferSizeMultiplier)
