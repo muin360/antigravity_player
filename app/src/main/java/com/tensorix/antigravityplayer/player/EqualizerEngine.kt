@@ -70,7 +70,7 @@ class EqualizerEngine(private val context: Context) {
     private val _preAmpGainDb = MutableStateFlow<Float>(0.0f)
     val preAmpGainDb: StateFlow<Float> = _preAmpGainDb.asStateFlow()
 
-    private val _isTurboSharpness = MutableStateFlow(true)
+    private val _isTurboSharpness = MutableStateFlow(false)
     val isTurboSharpness: StateFlow<Boolean> = _isTurboSharpness.asStateFlow()
 
     private val _stereoExpansion = MutableStateFlow<Float>(1.0f)
@@ -150,7 +150,7 @@ class EqualizerEngine(private val context: Context) {
             _isBitPerfectBypass.value = prefs.getBoolean("bit_perfect_bypass", false)
             _replayGainEnabled.value = prefs.getBoolean("replay_gain_enabled", true)
             _preAmpGainDb.value = prefs.getFloat("pre_amp_db", 0.0f)
-            _isTurboSharpness.value = prefs.getBoolean("turbo_sharpness", true)
+            _isTurboSharpness.value = prefs.getBoolean("turbo_sharpness", false)
             _stereoExpansion.value = prefs.getFloat("stereo_expansion", 1.0f)
             _limiterThreshold.value = prefs.getFloat("limiter_threshold", 0.0f)
             _clarityGain.value = prefs.getFloat("clarity_gain", 0.0f)
@@ -250,8 +250,8 @@ class EqualizerEngine(private val context: Context) {
     }
 
     fun buildAuthoritativeConfig(): AuthoritativeDspConfig {
-        val isBypass = _isBitPerfectBypass.value
-        val isEnabled = _isEnabled.value
+        val isBypass = _isBitPerfectBypass.value || _listeningMode.value == com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE
+        val isEnabled = _isEnabled.value && _listeningMode.value != com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE
         val isRgEnabled = _replayGainEnabled.value
         val dsp = dspProcessor
         val eqBands = List(10) { idx ->

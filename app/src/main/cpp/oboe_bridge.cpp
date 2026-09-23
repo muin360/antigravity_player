@@ -372,6 +372,8 @@ public:
                 writeScratch_[i] = ring_[static_cast<size_t>(t + i) & kRingMask];
             }
 
+            runDiagnostics(writeScratch_.data(), samplesToCopy);
+
             const auto result = s->write(writeScratch_.data(),
                                          static_cast<int32_t>(chunkFrames),
                                          kWriteTimeoutNs);
@@ -417,6 +419,37 @@ public:
     std::atomic<int32_t> consecutiveTimeouts{0};
     std::atomic<int64_t> hardwareFramesBaseline_{0};
 
+    // Crackle Diagnostic Harness
+    std::atomic<int64_t> diagNanCount_{0};
+    std::atomic<int64_t> diagInfCount_{0};
+    std::atomic<int64_t> diagSpikeCount_{0};
+    float lastSampleForSpike_ = 0.0f;
+    
+    void runDiagnostics(const float* buffer, size_t numSamples) {
+        int64_t nans = 0;
+        int64_t infs = 0;
+        int64_t spikes = 0;
+        float last = lastSampleForSpike_;
+        for (size_t i = 0; i < numSamples; i++) {
+            float s = buffer[i];
+            if (std::isnan(s)) {
+                nans++;
+            } else if (std::isinf(s)) {
+                infs++;
+            } else {
+                float delta = std::abs(s - last);
+                if (delta > 1.5f) { // Anomalous sample jump (clipping max amplitude delta)
+                    spikes++;
+                }
+                last = s;
+            }
+        }
+        lastSampleForSpike_ = last;
+        if (nans > 0) diagNanCount_.fetch_add(nans, std::memory_order_relaxed);
+        if (infs > 0) diagInfCount_.fetch_add(infs, std::memory_order_relaxed);
+        if (spikes > 0) diagSpikeCount_.fetch_add(spikes, std::memory_order_relaxed);
+    }
+
     // Position query throttle state (guarded reads are cheap atomics).
     std::atomic<int64_t> lastQueryNs{0};
     std::atomic<int64_t> lastQueryFramePos{0};
@@ -460,6 +493,9 @@ public:
         atomicTimestampUs.store(0, std::memory_order_relaxed);
         atomicPositionFrames.store(0, std::memory_order_relaxed);
         consecutiveTimeouts.store(0, std::memory_order_relaxed);
+        diagNanCount_.store(0, std::memory_order_relaxed);
+        diagInfCount_.store(0, std::memory_order_relaxed);
+        diagSpikeCount_.store(0, std::memory_order_relaxed);
         resampler.reset();
         dsp.reset();
         transitionState(NativeLifecycleState::CLOSED);
@@ -469,7 +505,12 @@ public:
         {
             std::lock_guard<std::mutex> lock(lifecycleMutex);
             if (stream && isActive.load(std::memory_order_acquire)) {
-                transitionState(NativeLifecycleState::FLUSHING);
+                NativeLifecycleState current = lifecycleState_.load(std::memory_order_acquire);
+                bool wasStarted = (current == NativeLifecycleState::STARTED || current == NativeLifecycleState::PAUSED || current == NativeLifecycleState::STARTING);
+                
+                if (wasStarted) {
+                    transitionState(NativeLifecycleState::FLUSHING);
+                }
                 auto state = stream->getState();
                 // P0-6: Never issue flush() while state is Pausing or Started.
                 // Wait/observe until state reaches a legal flush state.
@@ -496,7 +537,9 @@ public:
                     }
                 }
                 hardwareFramesBaseline_.store(std::max<int64_t>(0, baseFrames), std::memory_order_release);
-                transitionState(NativeLifecycleState::PAUSED);
+                if (wasStarted) {
+                    transitionState(NativeLifecycleState::PAUSED);
+                }
             } else {
                 hardwareFramesBaseline_.store(0, std::memory_order_release);
             }
@@ -878,7 +921,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
            ->setSharingMode(bitPerfectMode ? oboe::SharingMode::Exclusive
                                            : oboe::SharingMode::Shared)
            ->setFormat(oboe::AudioFormat::Float)
-           ->setSampleRate(sampleRate)
+           ->setSampleRate(oboe::Unspecified)
+           ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::None)
            ->setChannelCount(channelCount)
            ->setUsage(oboeUsage)
            ->setContentType(oboeContentType);
@@ -1108,6 +1152,8 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         if (!activeStream || !wrapper->isActive.load(std::memory_order_acquire)) {
             return kErrStaleOrWrite;
         }
+
+        wrapper->runDiagnostics(scratch, static_cast<size_t>(numFrames * channelCount));
 
         const auto result =
             activeStream->write(scratch, numFrames, kWriteTimeoutNs);
@@ -1863,3 +1909,19 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
 }
 
 } // extern "C"
+
+extern "C"
+JNIEXPORT jlongArray JNICALL
+Java_com_tensorix_antigravityplayer_audio_OboeBridge_getDiagnostics(JNIEnv *env, jobject thiz, jlong handle) {
+    auto wrapper = getStream(handle);
+    if (!wrapper) return nullptr;
+    jlongArray result = env->NewLongArray(3);
+    if (result) {
+        jlong arr[3];
+        arr[0] = wrapper->diagNanCount_.load(std::memory_order_relaxed);
+        arr[1] = wrapper->diagInfCount_.load(std::memory_order_relaxed);
+        arr[2] = wrapper->diagSpikeCount_.load(std::memory_order_relaxed);
+        env->SetLongArrayRegion(result, 0, 3, arr);
+    }
+    return result;
+}

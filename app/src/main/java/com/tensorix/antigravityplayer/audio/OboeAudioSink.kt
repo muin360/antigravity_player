@@ -591,44 +591,52 @@ class OboeAudioSink(
         }
 
         val remaining = buffer.remaining()
+        
+        var hasPartialFrames = false
         synchronized(bufferLock) {
-            if (remaining == 0 && partialFrameBuffer.position() == 0) return true
+            hasPartialFrames = partialFrameBuffer.position() > 0
+        }
 
-            val bytesPerSample = when (pcmEncoding) {
-                C.ENCODING_PCM_FLOAT, C.ENCODING_PCM_32BIT -> 4
-                C.ENCODING_PCM_24BIT -> 3
-                C.ENCODING_PCM_8BIT -> 1
-                C.ENCODING_PCM_16BIT -> 2
-                else -> 2
-            }
+        if (remaining == 0 && !hasPartialFrames) return true
 
-            val bytesPerFrame = channelCount * bytesPerSample
-            if (bytesPerFrame <= 0) return true
+        val bytesPerSample = when (pcmEncoding) {
+            C.ENCODING_PCM_FLOAT, C.ENCODING_PCM_32BIT -> 4
+            C.ENCODING_PCM_24BIT -> 3
+            C.ENCODING_PCM_8BIT -> 1
+            C.ENCODING_PCM_16BIT -> 2
+            else -> 2
+        }
 
-            // Complete any pending partial frame from previous calls
-            if (partialFrameBuffer.position() > 0) {
-                val pendingBytes = partialFrameBuffer.position()
-                val needed = bytesPerFrame - pendingBytes
-                if (buffer.remaining() < needed) {
-                    // Not enough bytes to complete 1 frame; append to staging and return
-                    if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+        val bytesPerFrame = channelCount * bytesPerSample
+        if (bytesPerFrame <= 0) return true
+
+        // Complete any pending partial frame from previous calls
+        if (hasPartialFrames) {
+                synchronized(bufferLock) {
+                    val pendingBytes = partialFrameBuffer.position()
+                    val needed = bytesPerFrame - pendingBytes
+                    if (buffer.remaining() < needed) {
+                        // Not enough bytes to complete 1 frame; append to staging and return
+                        if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                            partialFrameBuffer.put(buffer)
+                        } else {
+                            partialFrameBuffer.clear()
+                        }
+                        return true
+                    }
+                    // Pull exact bytes needed to finish the frame
+                    val savedLimit = buffer.limit()
+                    buffer.limit(buffer.position() + needed)
+                    if (partialFrameBuffer.remaining() >= needed) {
                         partialFrameBuffer.put(buffer)
                     } else {
                         partialFrameBuffer.clear()
                     }
-                    return true
-                }
-                // Pull exact bytes needed to finish the frame
-                val savedLimit = buffer.limit()
-                buffer.limit(buffer.position() + needed)
-                if (partialFrameBuffer.remaining() >= needed) {
-                    partialFrameBuffer.put(buffer)
-                } else {
-                    partialFrameBuffer.clear()
-                }
-                buffer.limit(savedLimit)
+                    buffer.limit(savedLimit)
 
-                partialFrameBuffer.flip()
+                    partialFrameBuffer.flip()
+                }
+                
                 val stitchedResult = OboeBridge.writeDirect(
                     handle = handleSnapshot,
                     generation = generationSnapshot,
@@ -640,15 +648,17 @@ class OboeAudioSink(
                     isBitPerfect = bitPerfectMode
                 )
                 if (stitchedResult > 0) {
-                    partialFrameBuffer.clear()
+                    synchronized(bufferLock) { partialFrameBuffer.clear() }
                 } else if (stitchedResult == 0) {
                     // Cannot write yet; restore buffer and retry
-                    buffer.position(buffer.position() - needed)
-                    partialFrameBuffer.position(pendingBytes)
-                    partialFrameBuffer.limit(partialFrameBuffer.capacity())
+                    buffer.position(buffer.position() - (bytesPerFrame - synchronized(bufferLock) { partialFrameBuffer.limit() }))
+                    synchronized(bufferLock) {
+                        partialFrameBuffer.position(partialFrameBuffer.limit())
+                        partialFrameBuffer.limit(partialFrameBuffer.capacity())
+                    }
                     return false
                 } else {
-                    partialFrameBuffer.clear()
+                    synchronized(bufferLock) { partialFrameBuffer.clear() }
                     if (stitchedResult == RET_ERROR_UNSUPPORTED_ENCODING || stitchedResult == RET_ERROR_BAD_ARGUMENTS) {
                         Log.w(TAG_LOG, "FALLBACK: format unsupported natively (enc=$pcmEncoding ch=$channelCount)")
                         synchronized(lifecycleLock) { closeOboeStreamLocked() }
@@ -673,10 +683,12 @@ class OboeAudioSink(
             val usableBytes = curRemaining - remainder
             if (usableBytes <= 0) {
                 if (remainder > 0) {
-                    if (partialFrameBuffer.remaining() >= buffer.remaining()) {
-                        partialFrameBuffer.put(buffer)
-                    } else {
-                        partialFrameBuffer.clear()
+                    synchronized(bufferLock) {
+                        if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                            partialFrameBuffer.put(buffer)
+                        } else {
+                            partialFrameBuffer.clear()
+                        }
                     }
                 }
                 return true
@@ -734,10 +746,12 @@ class OboeAudioSink(
                     val bytesConsumed = framesWrittenResult * bytesPerFrame
                     buffer.position((curPosition + bytesConsumed).coerceAtMost(buffer.limit()))
                     if (buffer.remaining() in 1 until bytesPerFrame) {
-                        if (partialFrameBuffer.remaining() >= buffer.remaining()) {
-                            partialFrameBuffer.put(buffer)
-                        } else {
-                            partialFrameBuffer.clear()
+                        synchronized(bufferLock) {
+                            if (partialFrameBuffer.remaining() >= buffer.remaining()) {
+                                partialFrameBuffer.put(buffer)
+                            } else {
+                                partialFrameBuffer.clear()
+                            }
                         }
                     }
                     return !buffer.hasRemaining()
@@ -765,7 +779,6 @@ class OboeAudioSink(
                     AudioEngine.handleStreamError(framesWrittenResult, context)
                     return false
                 }
-            }
         }
     }
 

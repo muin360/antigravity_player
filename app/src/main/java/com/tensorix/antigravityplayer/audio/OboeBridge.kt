@@ -221,4 +221,7 @@ object OboeBridge {
     }
 
     external fun getNativeStreamInfo(handle: Long): NativeStreamInfo?
+
+    @JvmStatic
+    external fun getDiagnostics(handle: Long): LongArray?
 }
