@@ -250,8 +250,8 @@ class EqualizerEngine(private val context: Context) {
     }
 
     fun buildAuthoritativeConfig(): AuthoritativeDspConfig {
-        val isBypass = _isBitPerfectBypass.value || _listeningMode.value == com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE
-        val isEnabled = _isEnabled.value && _listeningMode.value != com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE
+        val isBypass = _isBitPerfectBypass.value
+        val isEnabled = _isEnabled.value
         val isRgEnabled = _replayGainEnabled.value
         val dsp = dspProcessor
         val eqBands = List(10) { idx ->
@@ -268,7 +268,7 @@ class EqualizerEngine(private val context: Context) {
                     frequencyHz = band.frequencyHz,
                     qFactor = band.qFactor,
                     gainDb = band.gainDb,
-                    isEnabled = true
+                    isEnabled = band.isEnabled
                 )
             } ?: emptyList()
         } else {

@@ -492,7 +492,7 @@ class OboeAudioSink(
             val prevHandle = streamIdentity.handle
             closeOboeStreamLocked()
             val curSnap = activeStreamSnapshot
-            if (curSnap != null && (prevHandle == 0L || curSnap.handle == prevHandle)) {
+            if (curSnap != null && prevHandle != 0L && curSnap.handle == prevHandle) {
                 activeStreamSnapshot = null
             }
             synchronized(bufferLock) {
@@ -515,7 +515,7 @@ class OboeAudioSink(
             val prevHandle = streamIdentity.handle
             closeOboeStreamLocked()
             val curSnap = activeStreamSnapshot
-            if (curSnap != null && (prevHandle == 0L || curSnap.handle == prevHandle)) {
+            if (curSnap != null && prevHandle != 0L && curSnap.handle == prevHandle) {
                 activeStreamSnapshot = null
             }
             synchronized(bufferLock) {
@@ -544,15 +544,21 @@ class OboeAudioSink(
             return false
         }
 
-        if (fallbackSink != null) {
-            val fb = fallbackSink ?: return false
-            return fb.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        val fb = synchronized(fallbackLock) { fallbackSink }
+        if (fb != null) {
+            return synchronized(fallbackLock) {
+                if (sinkState == SinkState.RELEASED || fallbackSink !== fb) false
+                else fb.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            }
         }
 
         // ---- Lazy open WITHOUT holding the lifecycle lock (P0-3) ----
         if (nativeUnsupported || !OboeBridge.isAvailable) {
-            return getOrCreateFallbackSink()
-                ?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+            val fbSink = getOrCreateFallbackSink() ?: return false
+            return synchronized(fallbackLock) {
+                if (sinkState == SinkState.RELEASED || fallbackSink !== fbSink) false
+                else fbSink.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            }
         }
         if (streamIdentity.handle == 0L) {
             if (!opening.compareAndSet(false, true)) {
@@ -576,8 +582,11 @@ class OboeAudioSink(
         val handleSnapshot = identitySnapshot.handle
         val generationSnapshot = identitySnapshot.generation
         if (handleSnapshot == 0L || generationSnapshot == 0L) {
-            return getOrCreateFallbackSink()
-                ?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+            val fbSink = getOrCreateFallbackSink() ?: return false
+            return synchronized(fallbackLock) {
+                if (sinkState == SinkState.RELEASED || fallbackSink !== fbSink) false
+                else fbSink.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            }
         }
 
         // ---- Clock anchoring & seek state machine (P0-6) ----

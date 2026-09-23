@@ -251,5 +251,19 @@ class BiquadFilter {
             val a2 = 1.0 - alpha
             return safeNormalize(b0, b1, b2, a0, a1, a2)
         }
+
+        fun computeForType(type: Int, f0: Double, q: Double, gainDb: Double, fs: Double): BiquadCoeffs {
+            return when (type) {
+                0 -> computePeakingEq(f0, q, gainDb, fs)
+                1 -> computeLowShelf(f0, q, gainDb, fs)
+                2 -> computeHighShelf(f0, q, gainDb, fs)
+                3 -> computeLowPass(f0, q, fs)
+                4 -> computeHighPass(f0, q, fs)
+                5 -> computeBandPass(f0, q, fs)
+                6 -> computeNotch(f0, q, fs)
+                7 -> computeAllPass(f0, q, fs)
+                else -> computePeakingEq(f0, q, gainDb, fs)
+            }
+        }
     }
 }

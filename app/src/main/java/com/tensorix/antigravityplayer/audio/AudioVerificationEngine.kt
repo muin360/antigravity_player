@@ -119,14 +119,14 @@ object AudioVerificationEngine {
 
         // 7. Direct & Mixer Path State
         val isDirectActive = when {
-            nativeInfo != null -> nativeInfo.sharingModeId == OboeBridge.SharingModeId.EXCLUSIVE || nativeInfo.sharingMode == "EXCLUSIVE"
             hardwareReport.isDirectOutputActive -> true
+            nativeInfo != null && (nativeInfo.sharingModeId == OboeBridge.SharingModeId.EXCLUSIVE || nativeInfo.sharingMode == "EXCLUSIVE") -> true
             else -> false
         }
         val directConfidence = when {
-            nativeInfo != null -> Confidence.VERIFIED
             hardwareReport.isDirectOutputActive -> Confidence.HIGH_CONFIDENCE
-            else -> Confidence.INFERRED
+            nativeInfo != null && (nativeInfo.sharingModeId == OboeBridge.SharingModeId.EXCLUSIVE || nativeInfo.sharingMode == "EXCLUSIVE") -> Confidence.HIGH_CONFIDENCE
+            else -> Confidence.UNKNOWN
         }
         val directPathState = when {
             isDirectActive -> DirectPathState.DIRECT_ACTIVE
@@ -134,11 +134,18 @@ object AudioVerificationEngine {
             else -> DirectPathState.DIRECT_UNKNOWN
         }
 
-        val isMixerActive = !isDirectActive
+        val isMixerActive = when {
+            isDirectActive -> false
+            nativeInfo != null && nativeInfo.sharingModeId == OboeBridge.SharingModeId.SHARED -> true
+            hardwareReport.audioThreadType == AudioFlingerThreadType.MIXER_THREAD -> true
+            else -> false
+        }
         val mixerPathState = when {
             isDirectActive -> MixerPathState.DIRECT_ACTIVE
             hardwareReport.isVendorHiFiActive && hardwareReport.isDirectOutputActive -> MixerPathState.DIRECT_ACTIVE
-            else -> MixerPathState.MIXER_ACTIVE
+            nativeInfo != null && nativeInfo.sharingModeId == OboeBridge.SharingModeId.SHARED -> MixerPathState.MIXER_ACTIVE
+            hardwareReport.audioThreadType == AudioFlingerThreadType.MIXER_THREAD -> MixerPathState.MIXER_ACTIVE
+            else -> MixerPathState.UNKNOWN
         }
 
         val resamplerActive = source.sampleRate.value > 0 && actual.sampleRate.value > 0 && source.sampleRate.value != actual.sampleRate.value

@@ -179,11 +179,11 @@ class UniversalHardwareDetector(private val context: Context) {
             )
         }
 
-        val manufacturer = Build.MANUFACTURER.lowercase()
-        val brand = Build.BRAND.lowercase()
-        val model = Build.MODEL.lowercase()
-        val hardware = Build.HARDWARE.lowercase()
-        val board = Build.BOARD.lowercase()
+        val manufacturer = Build.MANUFACTURER?.lowercase().orEmpty()
+        val brand = Build.BRAND?.lowercase().orEmpty()
+        val model = Build.MODEL?.lowercase().orEmpty()
+        val hardware = Build.HARDWARE?.lowercase().orEmpty()
+        val board = Build.BOARD?.lowercase().orEmpty()
 
         // 1. Vivo / iQOO AKM AK4376A / AK4377A
         if (manufacturer.contains("vivo") || brand.contains("vivo") || brand.contains("iqoo") || model.contains("x21")) {

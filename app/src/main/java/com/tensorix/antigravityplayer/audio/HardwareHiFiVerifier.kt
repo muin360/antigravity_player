@@ -149,8 +149,8 @@ object HardwareHiFiVerifier {
         val details = mutableListOf<String>()
         val limitations = mutableListOf<String>()
 
-        val systemSampleRate = audioManager?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48000
-        val framesPerBuffer = audioManager?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 192
+        val systemSampleRate = audioManager?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: -1
+        val framesPerBuffer = audioManager?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: -1
 
         // Check wired headset connection
         val isWiredHeadset = checkWiredHeadset(audioManager)
@@ -185,10 +185,11 @@ object HardwareHiFiVerifier {
 
         // 4. AudioFlinger Thread Type Detection
         // STRICT DISTINCTION: capability != active runtime state!
+        // Decouple absence of direct from mixer active (use UNKNOWN unless verified)
         val threadType = when {
             isVendorHiFi && isDirectActive -> AudioFlingerThreadType.OFFLOAD_THREAD
             isDirectActive -> AudioFlingerThreadType.DIRECT_THREAD
-            else -> AudioFlingerThreadType.MIXER_THREAD
+            else -> AudioFlingerThreadType.UNKNOWN
         }
 
         // 5. AudioSink Type Determination
@@ -196,7 +197,7 @@ object HardwareHiFiVerifier {
             AudioFlingerThreadType.OFFLOAD_THREAD -> "Direct Hardware Offload (Native DAC Bus)"
             AudioFlingerThreadType.DIRECT_THREAD -> "Direct PCM (Active Verified)"
             AudioFlingerThreadType.MIXER_THREAD -> if (isDirectSupported) "32-bit Float AudioSink (Direct Capable, Mixer Active)" else "32-bit Float AudioSink (AudioFlinger Mixer)"
-            AudioFlingerThreadType.UNKNOWN -> "Unknown AudioSink"
+            AudioFlingerThreadType.UNKNOWN -> if (isDirectSupported) "32-bit Float AudioSink (Direct Capable, Thread Unknown)" else "32-bit Float AudioSink (Thread Unknown)"
         }
 
         // 6. HAL-Level Direct Stream Eligibility Indicator
@@ -288,40 +289,46 @@ object HardwareHiFiVerifier {
             if (Build.VERSION.SDK_INT >= 31) encodingsToTest.add(8)
         }
 
-        val attributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-
-        for (encoding in encodingsToTest) {
-            val format = AudioFormat.Builder()
-                .setEncoding(encoding)
-                .setSampleRate(targetRate)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+        val attributes = runCatching {
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
+        }.getOrNull()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                try {
-                    val support = AudioManager.getDirectPlaybackSupport(format, attributes)
-                    if (support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED) {
-                        details.add("Direct Playback confirmed via Method A (Encoding=$encoding, $targetRate Hz)")
-                        return true
+        if (attributes != null) {
+            for (encoding in encodingsToTest) {
+                val format = runCatching {
+                    AudioFormat.Builder()
+                        .setEncoding(encoding)
+                        .setSampleRate(targetRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build()
+                }.getOrNull() ?: continue
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    try {
+                        val support = AudioManager.getDirectPlaybackSupport(format, attributes)
+                        if (support != AudioManager.DIRECT_PLAYBACK_NOT_SUPPORTED) {
+                            details.add("Direct Playback confirmed via Method A (Encoding=$encoding, $targetRate Hz)")
+                            return true
+                        }
+                    } catch (_: Exception) {
                     }
-                } catch (_: Exception) {
                 }
-            }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    val isSupported = runCatching {
-                        @Suppress("DEPRECATION")
-                        AudioTrack.isDirectPlaybackSupported(format, attributes)
-                    }.getOrDefault(false)
-                    if (isSupported) {
-                        details.add("Direct Output confirmed via Method B (AudioTrack direct support)")
-                        return true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        val isSupported = runCatching {
+                            @Suppress("DEPRECATION")
+                            AudioTrack.isDirectPlaybackSupported(format, attributes)
+                        }.getOrDefault(false)
+                        if (isSupported) {
+                            details.add("Direct Output confirmed via Method B (AudioTrack direct support)")
+                            return true
+                        }
+                    } catch (_: Exception) {
                     }
-                } catch (_: Exception) {
                 }
             }
         }
@@ -352,10 +359,10 @@ object HardwareHiFiVerifier {
         isWiredHeadset: Boolean,
         details: MutableList<String>
     ): Tuple4<Boolean, HardwareDacState, String, String> {
-        val manufacturer = Build.MANUFACTURER.lowercase()
-        val brand = Build.BRAND.lowercase()
-        val model = Build.MODEL.lowercase()
-        val hardware = Build.HARDWARE.lowercase()
+        val manufacturer = Build.MANUFACTURER?.lowercase().orEmpty()
+        val brand = Build.BRAND?.lowercase().orEmpty()
+        val model = Build.MODEL?.lowercase().orEmpty()
+        val hardware = Build.HARDWARE?.lowercase().orEmpty()
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val cr = context.contentResolver
 

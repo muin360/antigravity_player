@@ -38,7 +38,9 @@ data class FallbackDspConfiguration(
     val channelBalance: Double = 0.0,
     val invertPhase: Boolean = false,
     val airPresenceGainDb: Double = 0.0,
-    val bandGainsDb: List<Double> = List(10) { 0.0 }
+    val bandGainsDb: List<Double> = List(10) { 0.0 },
+    val peqBands: List<AuthoritativePeqBand> = emptyList(),
+    val isAutoEqEnabled: Boolean = false
 )
 
 data class FallbackDspSnapshot(
@@ -77,7 +79,8 @@ data class FallbackDspSnapshot(
     val dcBlockerCoeff: BiquadCoeffs = BiquadCoeffs(),
     val aaFilterCoeff: BiquadCoeffs = BiquadCoeffs(),
     val subBassFilterCoeff: BiquadCoeffs = BiquadCoeffs(),
-    val airFilterCoeff: BiquadCoeffs = BiquadCoeffs()
+    val airFilterCoeff: BiquadCoeffs = BiquadCoeffs(),
+    val peqCoeffs: List<BiquadCoeffs> = emptyList()
 )
 
 /**
@@ -310,6 +313,14 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
     private val subBassFilterL = BiquadFilter()
     private val subBassFilterR = BiquadFilter()
 
+    // Render-thread-owned PEQ filter state (up to 32 bands, Left & Right)
+    private val peqFiltersL = Array(32) { BiquadFilter() }
+    private val peqFiltersR = Array(32) { BiquadFilter() }
+    var peqBands: List<AuthoritativePeqBand> = emptyList()
+        private set
+    var isAutoEqEnabled: Boolean = false
+        private set
+
     // Waveshaping interpolation history
     private val osSamplesL = DoubleArray(4)
     private val osSamplesR = DoubleArray(4)
@@ -387,6 +398,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                 this.channelBalance = config.channelBalance
                 this.invertPhase = config.invertPhase
                 this.airPresenceGainDb = config.airPresenceGainDb
+                this.peqBands = config.peqBands
+                this.isAutoEqEnabled = config.isAutoEqEnabled
                 val limit = minOf(10, config.bandGainsDb.size)
                 for (i in 0 until limit) {
                     bandGainsDb[i] = config.bandGainsDb[i]
@@ -418,6 +431,18 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         val aa = BiquadFilter.computeLowPass(aaCorner, 0.707, sampleRate)
         val subBass = BiquadFilter.computeLowPass(80.0, 0.707, sampleRate)
         val air = BiquadFilter.computeHighShelf(16000.0, 0.5, airPresenceGainDb, sampleRate)
+
+        val peqCoeffList = if (isAutoEqEnabled && peqBands.isNotEmpty()) {
+            peqBands.take(32).map { band ->
+                if (band.isEnabled) {
+                    BiquadFilter.computeForType(band.filterType, band.frequencyHz, band.qFactor, band.gainDb, sampleRate)
+                } else {
+                    BiquadCoeffs()
+                }
+            }
+        } else {
+            emptyList()
+        }
 
         return FallbackDspSnapshot(
             generation = gen,
@@ -455,7 +480,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
             dcBlockerCoeff = dcBlocker,
             aaFilterCoeff = aa,
             subBassFilterCoeff = subBass,
-            airFilterCoeff = air
+            airFilterCoeff = air,
+            peqCoeffs = java.util.Collections.unmodifiableList(peqCoeffList)
         )
     }
 
@@ -560,6 +586,15 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
             subBassFilterR.setCoefficients(snap.subBassFilterCoeff)
             airFilterL.setCoefficients(snap.airFilterCoeff)
             airFilterR.setCoefficients(snap.airFilterCoeff)
+            val peqLimit = minOf(32, snap.peqCoeffs.size)
+            for (i in 0 until peqLimit) {
+                peqFiltersL[i].setCoefficients(snap.peqCoeffs[i])
+                peqFiltersR[i].setCoefficients(snap.peqCoeffs[i])
+            }
+            for (i in peqLimit until 32) {
+                peqFiltersL[i].setCoefficients(BiquadCoeffs())
+                peqFiltersR[i].setCoefficients(BiquadCoeffs())
+            }
             appliedGeneration = snap.generation
         }
 
@@ -688,6 +723,13 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
                     }
                 }
 
+                val peqCount = minOf(32, snap.peqCoeffs.size)
+                for (i in 0 until peqCount) {
+                    for (ch in 0 until minOf(channelCount, 2)) {
+                        frameSamples[ch] = if (ch == 0) peqFiltersL[i].process(frameSamples[ch]) else peqFiltersR[i].process(frameSamples[ch])
+                    }
+                }
+
                 if (channelCount >= 2) {
                     if (crossfeedLocal > 0) {
                         val lowL = crossfeedLPFL.process(frameSamples[0])
@@ -799,6 +841,8 @@ class Audiophile64BitDspProcessor : BaseAudioProcessor() {
         aaFilterL.reset(); aaFilterR.reset()
         dcBlockerL.reset(); dcBlockerR.reset()
         subBassFilterL.reset(); subBassFilterR.reset()
+        peqFiltersL.forEach { it.reset() }
+        peqFiltersR.forEach { it.reset() }
         appliedGeneration = 0L
     }
 

@@ -9,7 +9,8 @@ data class AutoEqBand(
     val filterType: Int, // 0 = PEAKING_EQ, 1 = LOW_SHELF, 2 = HIGH_SHELF, 3 = LOW_PASS, 4 = HIGH_PASS
     val frequencyHz: Double,
     val qFactor: Double,
-    val gainDb: Double
+    val gainDb: Double,
+    val isEnabled: Boolean = true
 )
 
 data class AutoEqProfile(

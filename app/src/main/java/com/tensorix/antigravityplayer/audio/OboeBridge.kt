@@ -125,19 +125,20 @@ object OboeBridge {
     external fun getHardwareFramesWritten(handle: Long): Long
     external fun getStagedPendingFrames(handle: Long): Long
 
-    // Explicit 11-State Native Stream Lifecycle (P0 Subsystem 5)
+    // Explicit 12-State Native Stream Lifecycle (P0 Subsystem 5)
     object LifecycleStateId {
         const val UNINITIALIZED = 0
         const val OPENING = 1
         const val OPEN = 2
         const val STARTING = 3
         const val STARTED = 4
-        const val PAUSED = 5
-        const val FLUSHING = 6
-        const val STOPPING = 7
-        const val CLOSING = 8
-        const val CLOSED = 9
-        const val FAILED = 10
+        const val PAUSING = 5
+        const val PAUSED = 6
+        const val FLUSHING = 7
+        const val STOPPING = 8
+        const val CLOSING = 9
+        const val CLOSED = 10
+        const val FAILED = 11
 
         fun toName(stateId: Int): String = when (stateId) {
             UNINITIALIZED -> "UNINITIALIZED"
@@ -145,6 +146,7 @@ object OboeBridge {
             OPEN -> "OPEN"
             STARTING -> "STARTING"
             STARTED -> "STARTED"
+            PAUSING -> "PAUSING"
             PAUSED -> "PAUSED"
             FLUSHING -> "FLUSHING"
             STOPPING -> "STOPPING"

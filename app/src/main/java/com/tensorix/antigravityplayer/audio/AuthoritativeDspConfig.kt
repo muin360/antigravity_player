@@ -225,7 +225,9 @@ data class AuthoritativeDspConfig(
             channelBalance = channelBalance,
             invertPhase = invertPhase,
             airPresenceGainDb = airPresenceGainDb,
-            bandGainsDb = bandGainsDb
+            bandGainsDb = bandGainsDb,
+            peqBands = peqBands,
+            isAutoEqEnabled = isAutoEqEnabled
         )
     }
 

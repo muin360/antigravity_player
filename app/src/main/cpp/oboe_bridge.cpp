@@ -59,7 +59,7 @@ int32_t bytesPerSampleFor(jint pcmEncoding) {
 }
 
 // ---------------------------------------------------------------------------
-// Explicit 11-state Native Audio Stream Lifecycle FSM (P0 Subsystem 5)
+// Explicit 12-state Native Audio Stream Lifecycle FSM (P0 Subsystem 5)
 // ---------------------------------------------------------------------------
 enum class NativeLifecycleState : int32_t {
     UNINITIALIZED = 0,
@@ -67,12 +67,13 @@ enum class NativeLifecycleState : int32_t {
     OPEN          = 2,
     STARTING      = 3,
     STARTED       = 4,
-    PAUSED        = 5,
-    FLUSHING      = 6,
-    STOPPING      = 7,
-    CLOSING       = 8,
-    CLOSED        = 9,
-    FAILED        = 10
+    PAUSING       = 5,
+    PAUSED        = 6,
+    FLUSHING      = 7,
+    STOPPING      = 8,
+    CLOSING       = 9,
+    CLOSED        = 10,
+    FAILED        = 11
 };
 
 inline const char* nativeLifecycleStateToString(NativeLifecycleState state) {
@@ -82,6 +83,7 @@ inline const char* nativeLifecycleStateToString(NativeLifecycleState state) {
         case NativeLifecycleState::OPEN:          return "OPEN";
         case NativeLifecycleState::STARTING:      return "STARTING";
         case NativeLifecycleState::STARTED:       return "STARTED";
+        case NativeLifecycleState::PAUSING:       return "PAUSING";
         case NativeLifecycleState::PAUSED:        return "PAUSED";
         case NativeLifecycleState::FLUSHING:      return "FLUSHING";
         case NativeLifecycleState::STOPPING:      return "STOPPING";
@@ -92,7 +94,7 @@ inline const char* nativeLifecycleStateToString(NativeLifecycleState state) {
     return "UNKNOWN";
 }
 
-inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycleState to) {
+inline bool isValidTransition(NativeLifecycleState from, NativeLifecycleState to) {
     if (from == to) return true;
     switch (from) {
         case NativeLifecycleState::UNINITIALIZED:
@@ -107,12 +109,18 @@ inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycl
                    to == NativeLifecycleState::FAILED;
         case NativeLifecycleState::STARTING:
             return to == NativeLifecycleState::STARTED ||
+                   to == NativeLifecycleState::PAUSING ||
                    to == NativeLifecycleState::FAILED ||
                    to == NativeLifecycleState::CLOSING;
         case NativeLifecycleState::STARTED:
-            return to == NativeLifecycleState::PAUSED ||
+            return to == NativeLifecycleState::PAUSING ||
+                   to == NativeLifecycleState::PAUSED ||
                    to == NativeLifecycleState::FLUSHING ||
                    to == NativeLifecycleState::STOPPING ||
+                   to == NativeLifecycleState::FAILED ||
+                   to == NativeLifecycleState::CLOSING;
+        case NativeLifecycleState::PAUSING:
+            return to == NativeLifecycleState::PAUSED ||
                    to == NativeLifecycleState::FAILED ||
                    to == NativeLifecycleState::CLOSING;
         case NativeLifecycleState::PAUSED:
@@ -140,6 +148,10 @@ inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycl
             return to == NativeLifecycleState::OPENING;
     }
     return false;
+}
+
+inline bool isLegalLifecycleTransition(NativeLifecycleState from, NativeLifecycleState to) {
+    return isValidTransition(from, to);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +417,41 @@ public:
     std::condition_variable quiesceCv_;
     std::atomic<bool> quiesceRequested_{false};
 
+    // -------------------------------------------------------------------
+    // Formal Writer Admission & Quiescence Protocol (P0 Subsystem 1)
+    // -------------------------------------------------------------------
+    bool admitWriter() {
+        if (quiesceRequested_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        int32_t expected = 0;
+        return activeWriters_.compare_exchange_strong(expected, 1,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire);
+    }
+
+    void releaseWriter() {
+        activeWriters_.store(0, std::memory_order_release);
+        if (quiesceRequested_.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lk(quiesceMutex_);
+            quiesceCv_.notify_all();
+        }
+    }
+
+    void beginWriterShutdown() {
+        quiesceRequested_.store(true, std::memory_order_release);
+    }
+
+    void waitForWriterQuiescence() {
+        beginWriterShutdown();
+        if (activeWriters_.load(std::memory_order_acquire) > 0) {
+            std::unique_lock<std::mutex> lk(quiesceMutex_);
+            quiesceCv_.wait(lk, [this] {
+                return activeWriters_.load(std::memory_order_acquire) == 0;
+            });
+        }
+    }
+
     // Formally race-safe stream pointer snapshot for control-plane callers:
     std::shared_ptr<oboe::AudioStream> getStreamSnapshot() {
         std::lock_guard<std::mutex> lock(lifecycleMutex);
@@ -419,10 +466,11 @@ public:
     std::atomic<int32_t> consecutiveTimeouts{0};
     std::atomic<int64_t> hardwareFramesBaseline_{0};
 
-    // Crackle Diagnostic Harness
+    // Crackle Diagnostic Harness (zero overhead in production)
     std::atomic<int64_t> diagNanCount_{0};
     std::atomic<int64_t> diagInfCount_{0};
     std::atomic<int64_t> diagSpikeCount_{0};
+#if defined(DEBUG_AUDIO_DIAGNOSTICS)
     float lastSampleForSpike_ = 0.0f;
     
     void runDiagnostics(const float* buffer, size_t numSamples) {
@@ -449,6 +497,9 @@ public:
         if (infs > 0) diagInfCount_.fetch_add(infs, std::memory_order_relaxed);
         if (spikes > 0) diagSpikeCount_.fetch_add(spikes, std::memory_order_relaxed);
     }
+#else
+    inline void runDiagnostics(const float* /*buffer*/, size_t /*numSamples*/) noexcept {}
+#endif
 
     // Position query throttle state (guarded reads are cheap atomics).
     std::atomic<int64_t> lastQueryNs{0};
@@ -469,15 +520,9 @@ public:
         }
         recordNativeDiag("CLOSE_INTERNAL", 0, generationId, static_cast<int32_t>(NativeLifecycleState::CLOSING));
         transitionState(NativeLifecycleState::CLOSING);
-        // Quiescence barrier: wait until any in-flight audio writer has finished writing.
+        // Quiescence barrier: wait untimed until all active audio writers have completed.
         // Hot-path writes are bounded by kWriteTimeoutNs (20ms), condition variable wakes immediately on writer completion.
-        quiesceRequested_.store(true, std::memory_order_release);
-        if (activeWriters_.load(std::memory_order_acquire) > 0) {
-            std::unique_lock<std::mutex> lk(quiesceMutex_);
-            quiesceCv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
-                return activeWriters_.load(std::memory_order_acquire) == 0;
-            });
-        }
+        waitForWriterQuiescence();
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         rawStream_.store(nullptr, std::memory_order_release);
         if (stream) {
@@ -506,38 +551,40 @@ public:
             std::lock_guard<std::mutex> lock(lifecycleMutex);
             if (stream && isActive.load(std::memory_order_acquire)) {
                 NativeLifecycleState current = lifecycleState_.load(std::memory_order_acquire);
-                bool wasStarted = (current == NativeLifecycleState::STARTED || current == NativeLifecycleState::PAUSED || current == NativeLifecycleState::STARTING);
+                bool canFlush = (current == NativeLifecycleState::STARTED ||
+                                 current == NativeLifecycleState::PAUSED ||
+                                 current == NativeLifecycleState::PAUSING);
                 
-                if (wasStarted) {
-                    transitionState(NativeLifecycleState::FLUSHING);
-                }
-                auto state = stream->getState();
-                // P0-6: Never issue flush() while state is Pausing or Started.
-                // Wait/observe until state reaches a legal flush state.
-                if (state == oboe::StreamState::Started || state == oboe::StreamState::Starting || state == oboe::StreamState::Pausing) {
-                    stream->requestPause();
-                    oboe::StreamState nextState = oboe::StreamState::Unknown;
-                    stream->waitForStateChange(oboe::StreamState::Pausing, &nextState, 50 * 1000000LL);
-                    state = stream->getState();
-                }
-                
-                if (state == oboe::StreamState::Paused || state == oboe::StreamState::Open ||
-                    state == oboe::StreamState::Stopped || state == oboe::StreamState::Flushed) {
-                    stream->flush(50 * 1000000LL);
-                } else {
-                    LOGW("flush: skipped native flush due to stream state %s", oboe::convertToText(state));
-                }
-
-                // Query baseline hardware frame position at flush time (Rule 14)
-                int64_t baseFrames = stream->getFramesRead();
-                if (baseFrames <= 0) {
-                    int64_t fp = 0, tns = 0;
-                    if (stream->getTimestamp(CLOCK_MONOTONIC, &fp, &tns) == oboe::Result::OK && fp > 0) {
-                        baseFrames = fp;
+                if (canFlush) {
+                    auto state = stream->getState();
+                    // P0-6: Never issue flush() while state is Pausing or Started.
+                    // Transition to PAUSING -> PAUSED first.
+                    if (state == oboe::StreamState::Started || state == oboe::StreamState::Starting || state == oboe::StreamState::Pausing) {
+                        transitionState(NativeLifecycleState::PAUSING);
+                        stream->requestPause();
+                        oboe::StreamState nextState = oboe::StreamState::Unknown;
+                        stream->waitForStateChange(oboe::StreamState::Pausing, &nextState, 50 * 1000000LL);
+                        transitionState(NativeLifecycleState::PAUSED);
+                        state = stream->getState();
                     }
-                }
-                hardwareFramesBaseline_.store(std::max<int64_t>(0, baseFrames), std::memory_order_release);
-                if (wasStarted) {
+                    
+                    transitionState(NativeLifecycleState::FLUSHING);
+                    if (state == oboe::StreamState::Paused || state == oboe::StreamState::Open ||
+                        state == oboe::StreamState::Stopped || state == oboe::StreamState::Flushed) {
+                        stream->flush(50 * 1000000LL);
+                    } else {
+                        LOGW("flush: skipped native flush due to stream state %s", oboe::convertToText(state));
+                    }
+
+                    // Query baseline hardware frame position at flush time (Rule 14)
+                    int64_t baseFrames = stream->getFramesRead();
+                    if (baseFrames <= 0) {
+                        int64_t fp = 0, tns = 0;
+                        if (stream->getTimestamp(CLOCK_MONOTONIC, &fp, &tns) == oboe::Result::OK && fp > 0) {
+                            baseFrames = fp;
+                        }
+                    }
+                    hardwareFramesBaseline_.store(std::max<int64_t>(0, baseFrames), std::memory_order_release);
                     transitionState(NativeLifecycleState::PAUSED);
                 }
             } else {
@@ -564,7 +611,7 @@ public:
         if (stream && isActive.load(std::memory_order_acquire)) {
             const auto s = stream->getState();
             if (s == oboe::StreamState::Started || s == oboe::StreamState::Starting) {
-                transitionState(NativeLifecycleState::PAUSED);
+                transitionState(NativeLifecycleState::PAUSING);
                 stream->requestPause();
                 oboe::StreamState nextState = oboe::StreamState::Unknown;
                 stream->waitForStateChange(oboe::StreamState::Pausing, &nextState, 30 * 1000000LL);
@@ -679,14 +726,8 @@ public:
         recordNativeDiag("ERROR_AFTER_CLOSE", 0, generationId, static_cast<int32_t>(error));
         transitionState(NativeLifecycleState::FAILED);
         isActive.store(false, std::memory_order_release);
-        // Quiescence barrier: wait for any active audio writer before destroying the stream
-        quiesceRequested_.store(true, std::memory_order_release);
-        if (activeWriters_.load(std::memory_order_acquire) > 0) {
-            std::unique_lock<std::mutex> lk(quiesceMutex_);
-            quiesceCv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
-                return activeWriters_.load(std::memory_order_acquire) == 0;
-            });
-        }
+        // Quiescence barrier: wait untimed for active audio writers before destroying the stream
+        waitForWriterQuiescence();
         rawStream_.store(nullptr, std::memory_order_release);
         std::lock_guard<std::mutex> lock(lifecycleMutex);
         if (stream.get() == audioStream) {
@@ -921,7 +962,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
            ->setSharingMode(bitPerfectMode ? oboe::SharingMode::Exclusive
                                            : oboe::SharingMode::Shared)
            ->setFormat(oboe::AudioFormat::Float)
-           ->setSampleRate(oboe::Unspecified)
+           ->setSampleRate(sampleRate)
            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::None)
            ->setChannelCount(channelCount)
            ->setUsage(oboeUsage)
@@ -1027,18 +1068,13 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     }
 
     // Rule 5: Enforce single-writer model per stream with atomic admission
-    int32_t expectedWriters = 0;
-    if (!wrapper->activeWriters_.compare_exchange_strong(expectedWriters, 1, std::memory_order_acq_rel)) {
-        return 0; // concurrent write detected; single-writer model
+    if (!wrapper->admitWriter()) {
+        return wrapper->quiesceRequested_.load(std::memory_order_acquire) ? kErrStaleOrWrite : 0;
     }
     struct WriterGuard {
         OboeStreamWrapper *w;
         ~WriterGuard() {
-            w->activeWriters_.store(0, std::memory_order_release);
-            if (w->quiesceRequested_.load(std::memory_order_acquire)) {
-                std::lock_guard<std::mutex> lk(w->quiesceMutex_);
-                w->quiesceCv_.notify_all();
-            }
+            w->releaseWriter();
         }
     } writerGuard{wrapper};
 
@@ -1639,72 +1675,82 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
     auto w = getStream(handle);
     if (!w) return;
 
+    if (!activeFlags || env->GetArrayLength(activeFlags) < 17 ||
+        !doubleParams || env->GetArrayLength(doubleParams) < 27) {
+        LOGW("setDspUnifiedConfig: malformed base parameter arrays; rejecting update to protect active state");
+        return;
+    }
+
     antigravity::DspParams p;
     p.enabled = (enabled == JNI_TRUE);
     p.bitPerfectBypass = (bitPerfectBypass == JNI_TRUE);
     p.outputBitDepth = (outputBitDepth == 16 || outputBitDepth == 24 || outputBitDepth == 32) ? outputBitDepth : 24;
     p.invertPhase = (invertPhase == JNI_TRUE);
 
-    if (activeFlags && env->GetArrayLength(activeFlags) >= 17) {
-        jboolean flags[17];
-        env->GetBooleanArrayRegion(activeFlags, 0, 17, flags);
-        p.eqActive = (flags[0] == JNI_TRUE);
-        p.autoEqActive = (flags[1] == JNI_TRUE);
-        p.peqActive = (flags[2] == JNI_TRUE);
-        p.limiterActive = (flags[3] == JNI_TRUE);
-        p.ditherActive = (flags[4] == JNI_TRUE);
-        p.replayGainActive = (flags[5] == JNI_TRUE);
-        p.crossfeedActive = (flags[6] == JNI_TRUE);
-        p.balanceActive = (flags[7] == JNI_TRUE);
-        p.spatialActive = (flags[8] == JNI_TRUE);
-        p.bassBoostActive = (flags[9] == JNI_TRUE);
-        p.trebleActive = (flags[10] == JNI_TRUE);
-        p.clarityActive = (flags[11] == JNI_TRUE);
-        p.harmonicExciterActive = (flags[12] == JNI_TRUE);
-        p.saturationActive = (flags[13] == JNI_TRUE);
-        p.stereoExpansionActive = (flags[14] == JNI_TRUE);
-        p.subBassMonoActive = (flags[15] == JNI_TRUE);
-        p.channelTransformActive = (flags[16] == JNI_TRUE);
-    }
+    jboolean flags[17];
+    env->GetBooleanArrayRegion(activeFlags, 0, 17, flags);
+    p.eqActive = (flags[0] == JNI_TRUE);
+    p.autoEqActive = (flags[1] == JNI_TRUE);
+    p.peqActive = (flags[2] == JNI_TRUE);
+    p.limiterActive = (flags[3] == JNI_TRUE);
+    p.ditherActive = (flags[4] == JNI_TRUE);
+    p.replayGainActive = (flags[5] == JNI_TRUE);
+    p.crossfeedActive = (flags[6] == JNI_TRUE);
+    p.balanceActive = (flags[7] == JNI_TRUE);
+    p.spatialActive = (flags[8] == JNI_TRUE);
+    p.bassBoostActive = (flags[9] == JNI_TRUE);
+    p.trebleActive = (flags[10] == JNI_TRUE);
+    p.clarityActive = (flags[11] == JNI_TRUE);
+    p.harmonicExciterActive = (flags[12] == JNI_TRUE);
+    p.saturationActive = (flags[13] == JNI_TRUE);
+    p.stereoExpansionActive = (flags[14] == JNI_TRUE);
+    p.subBassMonoActive = (flags[15] == JNI_TRUE);
+    p.channelTransformActive = (flags[16] == JNI_TRUE);
 
-    if (doubleParams && env->GetArrayLength(doubleParams) >= 27) {
-        jdouble vals[27];
-        env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
-        for (int i = 0; i < 27; ++i) {
-            if (!std::isfinite(vals[i])) {
-                LOGW("setDspUnifiedConfig: non-finite parameter at index %d; rejecting unified update", i);
-                return; // Fail closed: reject invalid parameters completely
-            }
+    jdouble vals[27];
+    env->GetDoubleArrayRegion(doubleParams, 0, 27, vals);
+    for (int i = 0; i < 27; ++i) {
+        if (!std::isfinite(vals[i])) {
+            LOGW("setDspUnifiedConfig: non-finite parameter at index %d; rejecting unified update", i);
+            return; // Fail closed: reject invalid parameters completely
         }
-        p.preAmpGainDb = std::clamp(vals[0], -20.0, 20.0);
-        p.bassBoostGainDb = std::clamp(vals[1], 0.0, 15.0);
-        p.trebleGainDb = std::clamp(vals[2], 0.0, 15.0);
-        p.harmonicExciterLevel = std::clamp(vals[3], 0.0, 1.0);
-        p.clarityEnhancerGainDb = std::clamp(vals[4], 0.0, 15.0);
-        p.stereoExpansionMultiplier = std::clamp(vals[5], 0.0, 2.0);
-        p.dvcVolume = std::clamp(vals[6], 0.0, 1.0);
-        p.replayGainMultiplier = std::clamp(vals[7], 0.01, 10.0);
-        p.ditherStrength = std::clamp(vals[8], 0.0, 1.0);
-        p.warmSaturationLevel = std::clamp(vals[9], 0.0, 1.0);
-        p.triodeWarmthLevel = std::clamp(vals[10], 0.0, 1.0);
-        p.pentodeTapeLevel = std::clamp(vals[11], 0.0, 1.0);
-        p.crossfeedLevel = std::clamp(vals[12], 0.0, 1.0);
-        p.limiterThresholdDb = std::clamp(vals[13], -20.0, 0.0);
-        p.channelBalance = std::clamp(vals[14], -1.0, 1.0);
-        p.airPresenceGainDb = std::clamp(vals[15], 0.0, 15.0);
-        p.hrtfRoomSize = std::clamp(vals[16], 0.0, 1.0);
-        for (int i = 0; i < 10; ++i) {
-            p.bandGainsDb[i] = std::clamp(vals[17 + i], -15.0, 15.0);
-        }
+    }
+    p.preAmpGainDb = std::clamp(vals[0], -20.0, 20.0);
+    p.bassBoostGainDb = std::clamp(vals[1], 0.0, 15.0);
+    p.trebleGainDb = std::clamp(vals[2], 0.0, 15.0);
+    p.harmonicExciterLevel = std::clamp(vals[3], 0.0, 1.0);
+    p.clarityEnhancerGainDb = std::clamp(vals[4], 0.0, 15.0);
+    p.stereoExpansionMultiplier = std::clamp(vals[5], 0.0, 2.0);
+    p.dvcVolume = std::clamp(vals[6], 0.0, 1.0);
+    p.replayGainMultiplier = std::clamp(vals[7], 0.01, 10.0);
+    p.ditherStrength = std::clamp(vals[8], 0.0, 1.0);
+    p.warmSaturationLevel = std::clamp(vals[9], 0.0, 1.0);
+    p.triodeWarmthLevel = std::clamp(vals[10], 0.0, 1.0);
+    p.pentodeTapeLevel = std::clamp(vals[11], 0.0, 1.0);
+    p.crossfeedLevel = std::clamp(vals[12], 0.0, 1.0);
+    p.limiterThresholdDb = std::clamp(vals[13], -20.0, 0.0);
+    p.channelBalance = std::clamp(vals[14], -1.0, 1.0);
+    p.airPresenceGainDb = std::clamp(vals[15], 0.0, 15.0);
+    p.hrtfRoomSize = std::clamp(vals[16], 0.0, 1.0);
+    for (int i = 0; i < 10; ++i) {
+        p.bandGainsDb[i] = std::clamp(vals[17 + i], -15.0, 15.0);
     }
 
     std::vector<antigravity::PeqBandParams> bands;
-    if (peqTypes && peqFreqs && peqQs && peqGains) {
+    if (peqTypes || peqFreqs || peqQs || peqGains || peqEnableds) {
+        if (!peqTypes || !peqFreqs || !peqQs || !peqGains || !peqEnableds) {
+            LOGW("setDspUnifiedConfig: mismatched nullness in PEQ arrays; rejecting update");
+            return;
+        }
         const jsize count = env->GetArrayLength(peqTypes);
-        if (count > 0 &&
-            env->GetArrayLength(peqFreqs) == count &&
-            env->GetArrayLength(peqQs) == count &&
-            env->GetArrayLength(peqGains) == count) {
+        if (env->GetArrayLength(peqFreqs) != count ||
+            env->GetArrayLength(peqQs) != count ||
+            env->GetArrayLength(peqGains) != count ||
+            env->GetArrayLength(peqEnableds) != count) {
+            LOGW("setDspUnifiedConfig: mismatched PEQ array lengths; rejecting update");
+            return;
+        }
+        if (count > 0) {
             const size_t limit = std::min(static_cast<size_t>(count), static_cast<size_t>(32));
             bands.reserve(limit);
 
@@ -1712,10 +1758,10 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
             jdouble *f = env->GetDoubleArrayElements(peqFreqs, nullptr);
             jdouble *q = env->GetDoubleArrayElements(peqQs, nullptr);
             jdouble *g = env->GetDoubleArrayElements(peqGains, nullptr);
-            jboolean *e = peqEnableds ? env->GetBooleanArrayElements(peqEnableds, nullptr) : nullptr;
+            jboolean *e = env->GetBooleanArrayElements(peqEnableds, nullptr);
 
-            if (!t || !f || !q || !g) {
-                LOGE("setDspUnifiedConfig: failed to access PEQ JNI arrays; rejecting PEQ part");
+            if (!t || !f || !q || !g || !e) {
+                LOGE("setDspUnifiedConfig: failed to access PEQ JNI arrays; rejecting update");
                 if (t) env->ReleaseIntArrayElements(peqTypes, t, JNI_ABORT);
                 if (f) env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
                 if (q) env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
@@ -1738,7 +1784,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
                 env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
                 env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
                 env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
-                if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
+                env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
                 return;
             }
 
@@ -1748,7 +1794,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
                 band.frequency = std::clamp(f[i], 10.0, 24000.0);
                 band.q = std::clamp(q[i], 0.05, 100.0);
                 band.gainDb = std::clamp(g[i], -36.0, 36.0);
-                band.enabled = e ? (e[i] == JNI_TRUE) : true;
+                band.enabled = (e[i] == JNI_TRUE);
                 bands.push_back(band);
             }
 
@@ -1756,7 +1802,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_setDspUnifiedConfig(
             env->ReleaseDoubleArrayElements(peqFreqs, f, JNI_ABORT);
             env->ReleaseDoubleArrayElements(peqQs, q, JNI_ABORT);
             env->ReleaseDoubleArrayElements(peqGains, g, JNI_ABORT);
-            if (e) env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
+            env->ReleaseBooleanArrayElements(peqEnableds, e, JNI_ABORT);
         }
     }
 

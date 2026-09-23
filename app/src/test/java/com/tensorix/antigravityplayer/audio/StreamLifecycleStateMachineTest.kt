@@ -34,13 +34,20 @@ class StreamLifecycleStateMachineTest {
             ),
             OboeBridge.LifecycleStateId.STARTING to setOf(
                 OboeBridge.LifecycleStateId.STARTED,
+                OboeBridge.LifecycleStateId.PAUSING,
                 OboeBridge.LifecycleStateId.FAILED,
                 OboeBridge.LifecycleStateId.CLOSING
             ),
             OboeBridge.LifecycleStateId.STARTED to setOf(
+                OboeBridge.LifecycleStateId.PAUSING,
                 OboeBridge.LifecycleStateId.PAUSED,
                 OboeBridge.LifecycleStateId.FLUSHING,
                 OboeBridge.LifecycleStateId.STOPPING,
+                OboeBridge.LifecycleStateId.FAILED,
+                OboeBridge.LifecycleStateId.CLOSING
+            ),
+            OboeBridge.LifecycleStateId.PAUSING to setOf(
+                OboeBridge.LifecycleStateId.PAUSED,
                 OboeBridge.LifecycleStateId.FAILED,
                 OboeBridge.LifecycleStateId.CLOSING
             ),
@@ -55,6 +62,7 @@ class StreamLifecycleStateMachineTest {
             OboeBridge.LifecycleStateId.FLUSHING to setOf(
                 OboeBridge.LifecycleStateId.PAUSED,
                 OboeBridge.LifecycleStateId.STARTED,
+                OboeBridge.LifecycleStateId.STOPPING,
                 OboeBridge.LifecycleStateId.FAILED,
                 OboeBridge.LifecycleStateId.CLOSING
             ),
@@ -107,6 +115,8 @@ class StreamLifecycleStateMachineTest {
     @Test
     fun `test legal pause and resume cycle`() {
         val fsm = ProductionStreamLifecycleFsm(OboeBridge.LifecycleStateId.STARTED)
+        assertTrue(fsm.transition(OboeBridge.LifecycleStateId.PAUSING))
+        assertEquals("PAUSING", OboeBridge.LifecycleStateId.toName(fsm.state))
         assertTrue(fsm.transition(OboeBridge.LifecycleStateId.PAUSED))
         assertEquals("PAUSED", OboeBridge.LifecycleStateId.toName(fsm.state))
         assertTrue(fsm.transition(OboeBridge.LifecycleStateId.STARTING))
@@ -118,7 +128,7 @@ class StreamLifecycleStateMachineTest {
         val fsm = ProductionStreamLifecycleFsm(OboeBridge.LifecycleStateId.STARTED)
         assertTrue(fsm.transition(OboeBridge.LifecycleStateId.FLUSHING))
         assertEquals("FLUSHING", OboeBridge.LifecycleStateId.toName(fsm.state))
-        assertTrue(fsm.transition(OboeBridge.LifecycleStateId.STARTED))
+        assertTrue(fsm.transition(OboeBridge.LifecycleStateId.PAUSED))
     }
 
     @Test
@@ -148,12 +158,13 @@ class StreamLifecycleStateMachineTest {
     }
 
     @Test
-    fun `test all 11 lifecycle state names are truthful`() {
+    fun `test all 12 lifecycle state names are truthful`() {
         assertEquals("UNINITIALIZED", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.UNINITIALIZED))
         assertEquals("OPENING", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.OPENING))
         assertEquals("OPEN", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.OPEN))
         assertEquals("STARTING", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.STARTING))
         assertEquals("STARTED", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.STARTED))
+        assertEquals("PAUSING", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.PAUSING))
         assertEquals("PAUSED", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.PAUSED))
         assertEquals("FLUSHING", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.FLUSHING))
         assertEquals("STOPPING", OboeBridge.LifecycleStateId.toName(OboeBridge.LifecycleStateId.STOPPING))
