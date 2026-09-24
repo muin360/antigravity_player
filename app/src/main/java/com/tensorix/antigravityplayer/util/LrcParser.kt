@@ -12,6 +12,7 @@ data class LrcLine(
  * - Colon/dot separators: [00:02:00], [0:02.5], [00:02.500]
  */
 object LrcParser {
+    private val lrcCache = java.util.concurrent.ConcurrentHashMap<String, List<LrcLine>>()
     fun parse(lrcContent: String): List<LrcLine> {
         val result = mutableListOf<LrcLine>()
         if (lrcContent.isBlank()) return result

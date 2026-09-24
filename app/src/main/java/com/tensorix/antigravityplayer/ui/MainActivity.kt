@@ -250,7 +250,7 @@ fun MainAppScreen(
     val isSampleRateMatching by viewModel.isSampleRateMatching.collectAsStateWithLifecycle()
     val isAudioAuxEnabled by viewModel.audioAuxEnabled.collectAsStateWithLifecycle()
 
-    var currentTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
+    var currentTab by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val hapticsTick = { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
     var showFullPlayer by remember { mutableStateOf(false) }

@@ -343,6 +343,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun togglePlayPause() = musicController.togglePlayPause()
     fun skipToNext() = musicController.skipToNext()
     fun skipToPrevious() = musicController.skipToPrevious()
+    fun clearQueue() = musicController.clearQueue()
     fun seekTo(positionMs: Long) = musicController.seekTo(positionMs)
     fun toggleShuffle() = musicController.toggleShuffle()
     fun toggleRepeat() = musicController.toggleRepeat()
@@ -402,7 +403,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        super.onCleared()
         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         sleepTimerJob?.cancel()
         musicController.release()

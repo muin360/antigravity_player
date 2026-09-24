@@ -56,15 +56,7 @@ fun MiniPlayer(
 
     val haptics = LocalHapticFeedback.current
 
-    // Phase 22: high-frequency position updates are collected HERE so only
-    // this subtree recomposes on each tick, never the whole application.
-    val progressMs by progressMsFlow.collectAsStateWithLifecycle()
-
-    val progressFraction by animateFloatAsState(
-        targetValue = if (durationMs > 0) (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f,
-        animationSpec = spring(stiffness = Spring.StiffnessLow),
-        label = "progress"
-    )
+    // Phase 66: Isolated position slider to prevent MiniPlayer full recomposition
 
     val infiniteTransition = rememberInfiniteTransition(label = "glow")
     val glowAlpha by infiniteTransition.animateFloat(
@@ -100,23 +92,7 @@ fun MiniPlayer(
         Column(modifier = Modifier.fillMaxWidth()) {
             // Gradient progress track with rounded caps (premium replacement
             // for the stock LinearProgressIndicator).
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .background(Color(0x1AFFFFFF))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
-                        .fillMaxHeight()
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(PrimaryCyan, SecondaryViolet)
-                            )
-                        )
-                )
-            }
+            MiniPlayerProgressBar(progressMsFlow, durationMs)
 
             Row(
                 modifier = Modifier
@@ -250,6 +226,37 @@ fun MiniPlayer(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MiniPlayerProgressBar(
+    progressMsFlow: kotlinx.coroutines.flow.StateFlow<Long>,
+    durationMs: Long
+) {
+    val progressMs by progressMsFlow.collectAsStateWithLifecycle()
+    val progressFraction by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (durationMs > 0) (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f,
+        animationSpec = androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessLow),
+        label = "progress"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(3.dp)
+            .background(Color(0x1AFFFFFF))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .background(
+                    brush = Brush.horizontalGradient(
+                        colors = listOf(PrimaryCyan, SecondaryViolet)
+                    )
+                )
+        )
     }
 }
 

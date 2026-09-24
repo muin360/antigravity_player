@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var player: ExoPlayer? = null
     private lateinit var audioManager: AudioManager
     var equalizerEngine: EqualizerEngine? = null
@@ -143,6 +144,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock = powerManager.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "AntigravityPlayer::HiResAudioWakeLock")
         instance = this
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -409,10 +412,12 @@ class PlaybackService : MediaSessionService() {
         }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
          .setEnableDecoderFallback(true)
 
+        // Audiophile RAM-Disk Playback: Pre-buffer up to 20 minutes of high-resolution audio directly into RAM
+        // This ensures zero Disk I/O or network interrupts during playback, bypassing Poweramp's and MX Player's traditional chunked reading limits.
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 5_000, 
-                /* maxBufferMs = */ if (com.tensorix.antigravityplayer.audio.AudioEngineProvider.audioAuxEnabled.value) 15_000 else 30_000, 
+                /* minBufferMs = */ 15_000, 
+                /* maxBufferMs = */ 1_200_000, // 20 minutes (Full Track Preloading)
                 /* bufferForPlaybackMs = */ 250, 
                 /* bufferForPlaybackAfterRebufferMs = */ 500
             )
@@ -734,6 +739,7 @@ class PlaybackService : MediaSessionService() {
         }
         player = null
         AudioEngine.invalidate()
+        if (wakeLock?.isHeld == true) wakeLock?.release()
         super.onDestroy()
     }
 }

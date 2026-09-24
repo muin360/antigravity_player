@@ -444,6 +444,14 @@ class MusicController(private val context: Context) {
         }
     }
 
+    fun clearQueue() {
+        val controller = mediaController ?: return
+        controller.clearMediaItems()
+        _queue.value = emptyList()
+        songMap.evictAll()
+        _currentSong.value = null
+    }
+    
     fun skipToPrevious() {
         val controller = mediaController ?: return
         if (controller.currentPosition > 3000L) {
@@ -456,10 +464,15 @@ class MusicController(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long) {
+        val controller = mediaController ?: return
         runCatching { Log.i("SEEK", "User requested seekTo(positionMs=$positionMs)") }
         lastSeekRequestMs = android.os.SystemClock.elapsedRealtime()
-        _currentPositionMs.value = positionMs
-        mediaController?.seekTo(positionMs)
+        
+        val duration = controller.duration
+        val safePosition = if (duration > 0) positionMs.coerceIn(0L, maxOf(0L, duration - 100L)) else positionMs.coerceAtLeast(0L)
+        
+        _currentPositionMs.value = safePosition
+        controller.seekTo(safePosition)
     }
 
     fun toggleShuffle() {

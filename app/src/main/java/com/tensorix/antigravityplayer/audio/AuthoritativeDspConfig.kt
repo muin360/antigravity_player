@@ -58,6 +58,8 @@ data class AuthoritativeDspConfig(
     val hrtfRoomSize: Double = 0.5,
     val limiterEnabled: Boolean = false,
     val limiterThresholdDb: Double = 0.0,
+    val isTruePeakOversamplingEnabled: Boolean = true, // $5,000 DAC Feature: 4x Oversampled Inter-Sample Peak Limiter
+    val isApodizingFilterEnabled: Boolean = true,      // $5,000 DAC Feature: Pre-ringing elimination filter
     val ditherStrength: Double = 0.0,
     val outputBitDepth: Int = 24,
     val replayGainEnabled: Boolean = true,
@@ -221,6 +223,8 @@ data class AuthoritativeDspConfig(
             crossfeedLevel = crossfeedLevel,
             limiterEnabled = limiterEnabled,
             limiterThresholdDb = limiterThresholdDb,
+            isTruePeakOversamplingEnabled = isTruePeakOversamplingEnabled,
+            isApodizingFilterEnabled = isApodizingFilterEnabled,
             subBassMonoEnabled = subBassMonoEnabled,
             channelBalance = channelBalance,
             invertPhase = invertPhase,

@@ -55,20 +55,8 @@ fun LyricsSheet(
 ) {
     if (song == null) return
 
-    // Phase 22: lyric-sync position updates stay scoped to this sheet.
-    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
-
+    // Phase 66: Isolated position slider to prevent full sheet recomposition
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val listState = rememberLazyListState()
-
-    // Find active line index based on current position (-1 if before first line)
-    val activeIndex = lyricsLines.indexOfLast { it.timeMs <= currentPositionMs }
-
-    LaunchedEffect(activeIndex) {
-        if (lyricsLines.isNotEmpty() && activeIndex >= 0 && activeIndex in lyricsLines.indices) {
-            listState.animateScrollToItem((activeIndex - 2).coerceAtLeast(0))
-        }
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -121,46 +109,65 @@ fun LyricsSheet(
                     }
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    itemsIndexed(lyricsLines, key = { i, _ -> i }) { index, line ->
-                        val isActive = index == activeIndex
-                        // Premium active-line emphasis: animated color + scale
-                        val lineColor by androidx.compose.animation.animateColorAsState(
-                            targetValue = if (isActive) PrimaryCyan else TextSecondary.copy(alpha = 0.5f),
-                            animationSpec = androidx.compose.animation.core.tween(300),
-                            label = "lyricColor"
-                        )
-                        val lineScale by androidx.compose.animation.core.animateFloatAsState(
-                            targetValue = if (isActive) 1f else 0.88f,
-                            animationSpec = androidx.compose.animation.core.spring(
-                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                            ),
-                            label = "lyricScale"
-                        )
-                        val displayText = if (line.text.isEmpty()) if (isActive) "♪ ♪ ♪" else "♪" else line.text
-                        Text(
-                            text = displayText,
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = if (isActive) 22.sp else 16.sp,
-                                textAlign = TextAlign.Center
-                            ),
-                            color = lineColor,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .scale(lineScale)
-                                .padding(vertical = 4.dp)
-                        )
-                    }
-                }
+                IsolatedLyricsScroller(
+                    lyricsLines = lyricsLines,
+                    currentPositionMsFlow = currentPositionMsFlow
+                )
             }
         }
     }
 }
 
+@Composable
+private fun IsolatedLyricsScroller(
+    lyricsLines: List<LrcLine>,
+    currentPositionMsFlow: kotlinx.coroutines.flow.StateFlow<Long>
+) {
+    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val activeIndex = lyricsLines.indexOfLast { it.timeMs <= currentPositionMs }
+
+    LaunchedEffect(activeIndex) {
+        if (lyricsLines.isNotEmpty() && activeIndex >= 0 && activeIndex in lyricsLines.indices) {
+            listState.animateScrollToItem((activeIndex - 2).coerceAtLeast(0))
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        itemsIndexed(lyricsLines, key = { i, _ -> i }) { index, line ->
+            val isActive = index == activeIndex
+            val lineColor by androidx.compose.animation.animateColorAsState(
+                targetValue = if (isActive) PrimaryCyan else TextSecondary.copy(alpha = 0.5f),
+                animationSpec = androidx.compose.animation.core.tween(300),
+                label = "lyricColor"
+            )
+            val lineScale by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (isActive) 1f else 0.88f,
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                ),
+                label = "lyricScale"
+            )
+            val displayText = if (line.text.isEmpty()) if (isActive) "♪ ♪ ♪" else "♪" else line.text
+            Text(
+                text = displayText,
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                    fontSize = if (isActive) 22.sp else 16.sp,
+                    textAlign = TextAlign.Center
+                ),
+                color = lineColor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .scale(lineScale)
+                    .padding(vertical = 4.dp)
+            )
+        }
+    }
+}

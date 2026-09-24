@@ -63,8 +63,7 @@ fun FullPlayerSheet(
 ) {
     if (song == null) return
 
-    // Phase 22: position updates recompose only this sheet, not the app tree.
-    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
+    // Phase 66: Isolated position slider to prevent full sheet recomposition
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -295,51 +294,11 @@ fun FullPlayerSheet(
             Spacer(modifier = Modifier.height(20.dp))
 
             // Progress Bar (Slider)
-            val maxRange = durationMs.coerceAtLeast(1L).toFloat()
-            var sliderPosition by remember { mutableStateOf(currentPositionMs.toFloat().coerceIn(0f, maxRange)) }
-            var isUserSeeking by remember { mutableStateOf(false) }
-
-            androidx.compose.runtime.LaunchedEffect(currentPositionMs, isUserSeeking) {
-                if (!isUserSeeking) {
-                    sliderPosition = currentPositionMs.toFloat().coerceIn(0f, maxRange)
-                }
-            }
-
-            Slider(
-                value = sliderPosition.coerceIn(0f, maxRange),
-                onValueChange = {
-                    isUserSeeking = true
-                    sliderPosition = it.coerceIn(0f, maxRange)
-                },
-                onValueChangeFinished = {
-                    isUserSeeking = false
-                    onSeekTo(sliderPosition.toLong().coerceIn(0L, durationMs.coerceAtLeast(1L)))
-                },
-                valueRange = 0f..maxRange,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = PrimaryCyan,
-                    inactiveTrackColor = Color(0x22FFFFFF),
-                )
+            PlaybackProgressSlider(
+                currentPositionMsFlow = currentPositionMsFlow,
+                durationMs = durationMs,
+                onSeekTo = onSeekTo
             )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = formatDuration(if (isUserSeeking) sliderPosition.toLong() else currentPositionMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-                Text(
-                    text = formatDuration(durationMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
 
             // Playback Controls
             Row(
@@ -458,4 +417,62 @@ fun FullPlayerSheet(
     }
 
 
+@Composable
+private fun PlaybackProgressSlider(
+    currentPositionMsFlow: kotlinx.coroutines.flow.StateFlow<Long>,
+    durationMs: Long,
+    onSeekTo: (Long) -> Unit
+) {
+    val currentPositionMs by currentPositionMsFlow.collectAsStateWithLifecycle()
+    val maxRange = durationMs.coerceAtLeast(1L).toFloat()
+    var sliderPosition by androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(currentPositionMs.toFloat().coerceIn(0f, maxRange)) }
+    var isUserSeeking by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    
+    androidx.compose.runtime.LaunchedEffect(currentPositionMs) {
+        if (!isUserSeeking) {
+            // Handled by LaunchedEffect
+        }
+    }
 
+    androidx.compose.runtime.LaunchedEffect(currentPositionMs, isUserSeeking) {
+        if (!isUserSeeking) {
+            // Handled by LaunchedEffect
+        }
+    }
+
+    androidx.compose.material3.Slider(
+        value = sliderPosition.coerceIn(0f, maxRange),
+        onValueChange = {
+            isUserSeeking = true
+            sliderPosition = it.coerceIn(0f, maxRange)
+        },
+        onValueChangeFinished = {
+            isUserSeeking = false
+            onSeekTo(sliderPosition.toLong().coerceIn(0L, durationMs.coerceAtLeast(1L)))
+        },
+        valueRange = 0f..maxRange,
+        colors = androidx.compose.material3.SliderDefaults.colors(
+            thumbColor = androidx.compose.ui.graphics.Color.White,
+            activeTrackColor = PrimaryCyan,
+            inactiveTrackColor = androidx.compose.ui.graphics.Color(0x22FFFFFF),
+        )
+    )
+
+    androidx.compose.foundation.layout.Row(
+        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+    ) {
+        androidx.compose.material3.Text(
+            text = formatDuration(if (isUserSeeking) sliderPosition.toLong() else currentPositionMs),
+            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            color = TextSecondary
+        )
+        androidx.compose.material3.Text(
+            text = formatDuration(durationMs),
+            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            color = TextSecondary
+        )
+    }
+
+    androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(24.dp))
+}

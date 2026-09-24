@@ -1365,9 +1365,9 @@ private fun VuBar(peak: Float) {
 
 @Composable
 private fun LiveTelemetryHUD() {
-    var peakL by remember { mutableStateOf(0f) }
-    var peakR by remember { mutableStateOf(0f) }
-    var phaseCorr by remember { mutableStateOf(1f) }
+    var peakL by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var peakR by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var phaseCorr by remember { androidx.compose.runtime.mutableFloatStateOf(1f) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -1406,8 +1406,8 @@ private fun LiveTelemetryHUD() {
 
 @Composable
 private fun LivePeakText() {
-    var peakL by remember { mutableStateOf(0f) }
-    var peakR by remember { mutableStateOf(0f) }
+    var peakL by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var peakR by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     
     LaunchedEffect(Unit) {
         while (true) {
