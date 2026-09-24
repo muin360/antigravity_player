@@ -13,6 +13,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.tanh
 
+@UnstableApi
 data class FallbackDspConfiguration(
     val isEnabled: Boolean = true,
     val isBitPerfectBypass: Boolean = false,
@@ -43,6 +44,7 @@ data class FallbackDspConfiguration(
     val isAutoEqEnabled: Boolean = false
 )
 
+@UnstableApi
 data class FallbackDspSnapshot(
     val generation: Long = 1L,
     val isEnabled: Boolean = true,
