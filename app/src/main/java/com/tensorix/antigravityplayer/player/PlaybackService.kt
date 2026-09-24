@@ -412,12 +412,10 @@ class PlaybackService : MediaSessionService() {
         }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
          .setEnableDecoderFallback(true)
 
-        // Audiophile RAM-Disk Playback: Pre-buffer up to 20 minutes of high-resolution audio directly into RAM
-        // This ensures zero Disk I/O or network interrupts during playback, bypassing Poweramp's and MX Player's traditional chunked reading limits.
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ 15_000, 
-                /* maxBufferMs = */ 1_200_000, // 20 minutes (Full Track Preloading)
+                /* maxBufferMs = */ 30_000, 
                 /* bufferForPlaybackMs = */ 250, 
                 /* bufferForPlaybackAfterRebufferMs = */ 500
             )

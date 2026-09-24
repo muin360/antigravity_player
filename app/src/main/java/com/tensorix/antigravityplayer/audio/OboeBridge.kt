@@ -33,6 +33,7 @@ object OboeBridge {
     external fun writeDirect(
         handle: Long,
         generation: Long,
+        epoch: Long,
         directBuffer: java.nio.ByteBuffer,
         offsetBytes: Int,
         numBytes: Int,

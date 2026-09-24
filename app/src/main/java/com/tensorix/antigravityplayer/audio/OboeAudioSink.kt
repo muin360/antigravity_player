@@ -660,6 +660,7 @@ class OboeAudioSink(
                 val stitchedResult = OboeBridge.writeDirect(
                     handle = handleSnapshot,
                     generation = generationSnapshot,
+                    epoch = identitySnapshot.epoch,
                     directBuffer = partialFrameBuffer,
                     offsetBytes = 0,
                     numBytes = bytesPerFrame,
@@ -667,36 +668,39 @@ class OboeAudioSink(
                     pcmEncoding = pcmEncoding,
                     isBitPerfect = isDspBypassed
                 )
+
                 if (stitchedResult > 0) {
                     synchronized(bufferLock) { partialFrameBuffer.clear() }
-                } else if (stitchedResult == 0) {
-                    // Cannot write yet; restore consumed bytes back to buffer position.
-                    // CRACKLE ROOT-CAUSE VECTOR D (partial frame staging bug): previously
-                    // subtracted (bytesPerFrame - partialFrameBuffer.limit()) which evaluated
-                    // to 0 because limit() == bytesPerFrame after flip(), failing to restore
-                    // the 'needed' bytes consumed from buffer to complete the partial frame.
-                    buffer.position(buffer.position() - needed)
-                    synchronized(bufferLock) {
-                        partialFrameBuffer.position(partialFrameBuffer.limit())
-                        partialFrameBuffer.limit(partialFrameBuffer.capacity())
-                    }
-                    return false
                 } else {
-                    synchronized(bufferLock) { partialFrameBuffer.clear() }
-                    if (stitchedResult == RET_ERROR_UNSUPPORTED_ENCODING || stitchedResult == RET_ERROR_BAD_ARGUMENTS) {
-                        Log.w(TAG_LOG, "FALLBACK: format unsupported natively (enc=$pcmEncoding ch=$channelCount)")
-                        synchronized(lifecycleLock) { closeOboeStreamLocked() }
-                        nativeUnsupported = true
-                        val fallback = getOrCreateFallbackSink()
-                        lastInputFormat?.let { fmt ->
-                            fallback?.configure(fmt, lastSpecifiedBufferSize, lastOutputChannels)
+                    // Restore source buffer position because bytes were not permanently consumed
+                    buffer.position(buffer.position() - needed)
+                    
+                    if (stitchedResult == 0) {
+                        synchronized(bufferLock) {
+                            // Undo flip and put: restore position to the original pending bytes
+                            partialFrameBuffer.position(bytesPerFrame - needed)
+                            partialFrameBuffer.limit(partialFrameBuffer.capacity())
                         }
-                        return fallback?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
-                    } else {
-                        runCatching { Log.w(TAG_LOG, "RECOVERY_REQUEST: stitched write error $stitchedResult") }
-                        synchronized(lifecycleLock) { closeOboeStreamLocked() }
-                        AudioEngine.handleStreamError(stitchedResult, context)
                         return false
+                    } else {
+                        // < 0 means native error. Clear partial frames for this native epoch.
+                        synchronized(bufferLock) { partialFrameBuffer.clear() }
+
+                        if (stitchedResult == RET_ERROR_UNSUPPORTED_ENCODING || stitchedResult == RET_ERROR_BAD_ARGUMENTS) {
+                            Log.w(TAG_LOG, "FALLBACK: format unsupported natively (enc=$pcmEncoding ch=$channelCount)")
+                            synchronized(lifecycleLock) { closeOboeStreamLocked() }
+                            nativeUnsupported = true
+                            val fallback = getOrCreateFallbackSink()
+                            lastInputFormat?.let { fmt ->
+                                fallback?.configure(fmt, lastSpecifiedBufferSize, lastOutputChannels)
+                            }
+                            return fallback?.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount) ?: false
+                        } else {
+                            runCatching { Log.w(TAG_LOG, "RECOVERY_REQUEST: stitched write error $stitchedResult") }
+                            synchronized(lifecycleLock) { closeOboeStreamLocked() }
+                            AudioEngine.handleStreamError(stitchedResult, context)
+                            return false
+                        }
                     }
                 }
             }
@@ -737,6 +741,7 @@ class OboeAudioSink(
                 OboeBridge.writeDirect(
                     handle = handleSnapshot,
                     generation = generationSnapshot,
+                    epoch = identitySnapshot.epoch,
                     directBuffer = buffer,
                     offsetBytes = curPosition,
                     numBytes = bytesToWrite,
@@ -755,6 +760,7 @@ class OboeAudioSink(
                 OboeBridge.writeDirect(
                     handle = handleSnapshot,
                     generation = generationSnapshot,
+                    epoch = identitySnapshot.epoch,
                     directBuffer = directByteBuffer,
                     offsetBytes = 0,
                     numBytes = bytesToWrite,

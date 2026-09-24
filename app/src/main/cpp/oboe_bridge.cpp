@@ -186,68 +186,10 @@ inline void recordNativeDiag(const char *stage, jlong handle = 0, uint64_t gen =
     ev.extra = extra;
 }
 
-struct sigaction gOldSigSegv{}, gOldSigBus{}, gOldSigFpe{}, gOldSigIll{}, gOldSigAbrt{};
-
-void nativeCrashSignalHandler(int sig, siginfo_t *info, void *context) {
-    const char *sigName = "UNKNOWN";
-    switch (sig) {
-        case SIGSEGV: sigName = "SIGSEGV"; break;
-        case SIGBUS:  sigName = "SIGBUS"; break;
-        case SIGFPE:  sigName = "SIGFPE"; break;
-        case SIGILL:  sigName = "SIGILL"; break;
-        case SIGABRT: sigName = "SIGABRT"; break;
-    }
-    LOGE("🚨 [FATAL NATIVE SIGNAL CAUGHT] Signal: %s (%d) at fault addr: %p, thread: %d",
-         sigName, sig, info ? info->si_addr : nullptr, gettid());
-
-    const uint64_t curSeq = gDiagSequence.load(std::memory_order_relaxed);
-    const size_t count = std::min<size_t>(curSeq, kMaxDiagEvents);
-    const uint64_t startSeq = (curSeq > count) ? (curSeq - count) : 0;
-    LOGE("--- BEGIN RECENT NATIVE DIAGNOSTIC TRACE (last %zu events) ---", count);
-    for (uint64_t s = startSeq; s < curSeq; ++s) {
-        const auto &ev = gDiagBuffer[s % kMaxDiagEvents];
-        LOGE("[%llu] T+%" PRId64 "ns tid=%d stage=%s handle=%lld gen=%llu state=%d extra=%d",
-             static_cast<unsigned long long>(s),
-             ev.timestampNs, ev.threadId, ev.stage ? ev.stage : "null",
-             static_cast<long long>(ev.handle),
-             static_cast<unsigned long long>(ev.generation),
-             ev.state, ev.extra);
-    }
-    LOGE("--- END RECENT NATIVE DIAGNOSTIC TRACE ---");
-
-    struct sigaction *oldHandler = nullptr;
-    switch (sig) {
-        case SIGSEGV: oldHandler = &gOldSigSegv; break;
-        case SIGBUS:  oldHandler = &gOldSigBus; break;
-        case SIGFPE:  oldHandler = &gOldSigFpe; break;
-        case SIGILL:  oldHandler = &gOldSigIll; break;
-        case SIGABRT: oldHandler = &gOldSigAbrt; break;
-    }
-    if (oldHandler && (oldHandler->sa_flags & SA_SIGINFO) && oldHandler->sa_sigaction) {
-        oldHandler->sa_sigaction(sig, info, context);
-    } else if (oldHandler && oldHandler->sa_handler && oldHandler->sa_handler != SIG_DFL && oldHandler->sa_handler != SIG_IGN) {
-        oldHandler->sa_handler(sig);
-    } else {
-        signal(sig, SIG_DFL);
-        raise(sig);
-    }
-}
-
 void installNativeSignalHandler() {
-    static std::atomic<bool> installed{false};
-    if (installed.exchange(true)) return;
-
-    struct sigaction sa{};
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
-    sa.sa_sigaction = nativeCrashSignalHandler;
-    sigemptyset(&sa.sa_mask);
-
-    sigaction(SIGSEGV, &sa, &gOldSigSegv);
-    sigaction(SIGBUS, &sa, &gOldSigBus);
-    sigaction(SIGFPE, &sa, &gOldSigFpe);
-    sigaction(SIGILL, &sa, &gOldSigIll);
-    sigaction(SIGABRT, &sa, &gOldSigAbrt);
-    LOGI("Native engineering crash signal handlers installed successfully.");
+    // Custom crash handlers that use non-async-signal-safe functions (like __android_log_print) 
+    // are unsafe and can prevent standard Android tombstone generation.
+    // Removed to ensure stability and rely on the OS's native crash reporting.
 }
 
 } // namespace
@@ -428,33 +370,38 @@ public:
     // Formal Writer Admission & Quiescence Protocol (P0 Subsystem 1)
     // -------------------------------------------------------------------
     bool admitWriter() {
-        if (quiesceRequested_.load(std::memory_order_acquire)) {
+        int32_t expected = 0;
+        if (!activeWriters_.compare_exchange_strong(expected, 1,
+                                                    std::memory_order_seq_cst,
+                                                    std::memory_order_seq_cst)) {
             return false;
         }
-        int32_t expected = 0;
-        return activeWriters_.compare_exchange_strong(expected, 1,
-                                                      std::memory_order_acq_rel,
-                                                      std::memory_order_acquire);
+        if (quiesceRequested_.load(std::memory_order_seq_cst)) {
+            // A shutdown was requested concurrently. Back out safely.
+            releaseWriter();
+            return false;
+        }
+        return true;
     }
 
     void releaseWriter() {
-        activeWriters_.store(0, std::memory_order_release);
-        if (quiesceRequested_.load(std::memory_order_acquire)) {
+        activeWriters_.store(0, std::memory_order_seq_cst);
+        if (quiesceRequested_.load(std::memory_order_seq_cst)) {
             std::lock_guard<std::mutex> lk(quiesceMutex_);
             quiesceCv_.notify_all();
         }
     }
 
     void beginWriterShutdown() {
-        quiesceRequested_.store(true, std::memory_order_release);
+        quiesceRequested_.store(true, std::memory_order_seq_cst);
     }
 
     void waitForWriterQuiescence() {
         beginWriterShutdown();
-        if (activeWriters_.load(std::memory_order_acquire) > 0) {
+        if (activeWriters_.load(std::memory_order_seq_cst) > 0) {
             std::unique_lock<std::mutex> lk(quiesceMutex_);
             quiesceCv_.wait(lk, [this] {
-                return activeWriters_.load(std::memory_order_acquire) == 0;
+                return activeWriters_.load(std::memory_order_seq_cst) == 0;
             });
         }
     }
@@ -1076,7 +1023,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_getStreamGeneration(
 JNIEXPORT jint JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     JNIEnv *env, jobject thiz,
-    jlong handle, jlong generation,
+    jlong handle, jlong generation, jlong epoch,
     jobject directBuffer, jint offsetBytes, jint numBytes,
     jint numFrames, jint pcmEncoding, jboolean isBitPerfect) {
 
@@ -1096,6 +1043,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
     auto *wrapper = getStreamValidatedLockFree(handle, generation, lease);
     if (!wrapper || !wrapper->isActive.load(std::memory_order_acquire)) {
         return kErrStaleOrWrite;
+    }
+
+    // Explicit epoch ownership barrier (P0-6.3)
+    if (wrapper->audioEpoch_.load(std::memory_order_acquire) != static_cast<uint64_t>(epoch)) {
+        return 0; // Epoch mismatch: discard these frames cleanly
     }
 
     // Rule 5: Enforce single-writer model per stream with atomic admission

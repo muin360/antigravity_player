@@ -366,19 +366,15 @@ object HardwareHiFiVerifier {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val cr = context.contentResolver
 
-        // 1. Vivo / iQOO Hi-Fi Probing (runtime parameters + settings + sysfs)
+        // 1. Vivo / iQOO Hi-Fi Probing (runtime parameters + sysfs)
         if (manufacturer.contains("vivo") || brand.contains("vivo") || brand.contains("iqoo") || model.contains("x21")) {
             val hifiStateParam = audioManager?.getParameters("vivo_hifi_state") ?: ""
             val hifiParam = audioManager?.getParameters("vivo_hifi") ?: ""
             val headsetHifiParam = audioManager?.getParameters("vivo_headset_hifi") ?: ""
-            val hifiSettingState = runCatching { Settings.System.getInt(cr, "vivo_hifi_state") }.getOrDefault(-1)
-            val headsetHifiSetting = runCatching { Settings.System.getInt(cr, "vivo_headset_hifi") }.getOrDefault(-1)
 
             val isVivoParamActive = hifiStateParam.contains("vivo_hifi_state=1") ||
                     hifiParam.contains("vivo_hifi=1") ||
                     headsetHifiParam.contains("vivo_headset_hifi=1")
-
-            val isVivoSettingActive = hifiSettingState == 1 || headsetHifiSetting == 1
 
             // Sysfs Hardware Node Verification
             val sysfsNodes = listOf(
@@ -390,8 +386,8 @@ object HardwareHiFiVerifier {
             )
             val sysfsFound = sysfsNodes.any { File(it).exists() }
 
-            // Strictly requires real parameter or setting verification
-            val isHiFiActive = isVivoParamActive || isVivoSettingActive
+            // Strictly requires real HAL parameter verification
+            val isHiFiActive = isVivoParamActive
 
             val dacState = when {
                 isHiFiActive -> HardwareDacState.ACTIVE_VERIFIED
@@ -399,38 +395,34 @@ object HardwareHiFiVerifier {
                 else -> HardwareDacState.UNKNOWN_HAL_RESTRICTED
             }
 
-            details.add("Vivo Hi-Fi Individual Parameters: state='$hifiStateParam', hifi='$hifiParam', setting=$hifiSettingState")
-            // Principle 16: chip identity is NEVER inferred from model/board.
+            details.add("Vivo Hi-Fi Individual Parameters: state='$hifiStateParam', hifi='$hifiParam'")
             val chipName = "Vivo OEM Hi-Fi DAC (chip unverified)"
             return Tuple4(isHiFiActive, dacState, chipName, "OEM vendor path (runtime-probed)")
         }
 
-        // 2. LG Quad DAC Probing (runtime settings/params only)
+        // 2. LG Quad DAC Probing (runtime params only)
         if (manufacturer.contains("lge") || brand.contains("lge")) {
-            val quadDacSetting = runCatching { Settings.System.getInt(cr, "quad_dac_state") }.getOrDefault(-1)
             val quadDacParam = audioManager?.getParameters("quad_dac_state") ?: ""
-            val isQuadDacActive = quadDacSetting == 1 || quadDacParam.contains("quad_dac_state=1")
+            val isQuadDacActive = quadDacParam.contains("quad_dac_state=1")
 
             val dacState = if (isQuadDacActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
-            details.add("LG Quad DAC Setting: $quadDacSetting, Param: '$quadDacParam'")
+            details.add("LG Quad DAC Param: '$quadDacParam'")
             return Tuple4(isQuadDacActive, dacState, "LG OEM Quad DAC (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
         // 3. Samsung UHQ Probing
         if (manufacturer.contains("samsung")) {
-            val uhqSetting = runCatching { Settings.System.getInt(cr, "sound_alive_uhq_upscaler") }.getOrDefault(-1)
-            val isUhqActive = uhqSetting == 1
-            val dacState = if (isUhqActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
-            details.add("Samsung UHQ Setting: $uhqSetting")
+            val isUhqActive = false // Settings.System cannot be trusted as hardware proof
+            val dacState = HardwareDacState.UNKNOWN_HAL_RESTRICTED
+            details.add("Samsung UHQ: User settings ignored (not runtime proof)")
             return Tuple4(isUhqActive, dacState, "Samsung OEM UHQ DAC (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
         // 4. Sony Xperia Hi-Res Probing
         if (manufacturer.contains("sony")) {
-            val sonySetting = runCatching { Settings.System.getInt(cr, "sony_hires_audio_enabled") }.getOrDefault(-1)
-            val isSonyActive = sonySetting == 1
-            val dacState = if (isSonyActive) HardwareDacState.ACTIVE_VERIFIED else HardwareDacState.STANDBY
-            details.add("Sony Hi-Res Setting: $sonySetting")
+            val isSonyActive = false // Settings.System cannot be trusted as hardware proof
+            val dacState = HardwareDacState.UNKNOWN_HAL_RESTRICTED
+            details.add("Sony Hi-Res: User settings ignored (not runtime proof)")
             return Tuple4(isSonyActive, dacState, "Sony OEM Hi-Res Engine (chip unverified)", "OEM vendor path (runtime-probed)")
         }
 
