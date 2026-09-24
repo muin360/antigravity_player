@@ -171,14 +171,21 @@ class EqualizerEngine(private val context: Context) {
         _listeningMode.value = mode
         when (mode) {
             com.tensorix.antigravityplayer.audio.ListeningMode.REFERENCE -> {
+                _isBitPerfectBypass.value = true
+                _isEnabled.value = false
                 _preAmpGainDb.value = 0.0f
                 _clarityGain.value = 0.0f
                 _airPresence.value = 0.0f
                 _warmSaturation.value = 0.0f
+                _triodeWarmth.value = 0.0f
+                _pentodeTape.value = 0.0f
                 _crossfeedLevel.value = 0.0f
                 _stereoExpansion.value = 1.0f
+                _isTurboSharpness.value = false
             }
             com.tensorix.antigravityplayer.audio.ListeningMode.AUDIOPHILE -> {
+                _isBitPerfectBypass.value = false
+                _isEnabled.value = true
                 _preAmpGainDb.value = 3.5f
                 _clarityGain.value = 3.5f
                 _airPresence.value = 2.0f
@@ -187,6 +194,8 @@ class EqualizerEngine(private val context: Context) {
                 _stereoExpansion.value = 1.1f
             }
             com.tensorix.antigravityplayer.audio.ListeningMode.DYNAMIC -> {
+                _isBitPerfectBypass.value = false
+                _isEnabled.value = true
                 _preAmpGainDb.value = 4.0f
                 _clarityGain.value = 4.5f
                 _airPresence.value = 3.0f
@@ -197,6 +206,8 @@ class EqualizerEngine(private val context: Context) {
         }
         prefs.edit {
             putString("listening_mode", mode.name)
+            putBoolean("bit_perfect_bypass", _isBitPerfectBypass.value)
+            putBoolean("eq_enabled", _isEnabled.value)
             putFloat("pre_amp_db", _preAmpGainDb.value)
             putFloat("clarity_gain", _clarityGain.value)
             putFloat("air_presence", _airPresence.value)

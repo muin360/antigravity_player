@@ -36,7 +36,9 @@ constexpr jint kErrStaleOrWrite = -1;
 constexpr jint kErrUnsupportedEncoding = -2;
 constexpr jint kErrBadArguments = -3;
 
-constexpr int64_t kWriteTimeoutNs = 20 * 1000000LL;      // 20 ms bounded write
+constexpr int64_t kWriteTimeoutNs = 100 * 1000000LL;     // CRACKLE ROOT-CAUSE VECTOR A: was 20ms,
+                                                          // too short for large chunks (85ms @ 48kHz).
+                                                          // 100ms accommodates the worst-case HAL drain.
 constexpr int32_t kMaxConsecutiveTimeouts = 50;
 constexpr int32_t kMaxFramesPerCall = 1 << 20;            // sanity bound
 constexpr int64_t kPositionQueryIntervalNs = 10 * 1000000LL; // 10 ms throttle
@@ -391,10 +393,12 @@ public:
                                          kWriteTimeoutNs);
             if (result.error() != oboe::Result::OK) {
                 if (result.error() == oboe::Result::ErrorTimeout) {
+                    underrunCount_.fetch_add(1, std::memory_order_relaxed);
                     const int32_t timeouts =
                         consecutiveTimeouts.fetch_add(1, std::memory_order_relaxed) + 1;
                     if (timeouts > kMaxConsecutiveTimeouts) *stalled = true;
                 } else {
+                    nativeWriteErrorCount_.fetch_add(1, std::memory_order_relaxed);
                     *stalled = true;   // hard write error
                 }
                 break;   // staged data remains; continue next call
@@ -405,7 +409,10 @@ public:
                             std::memory_order_relaxed);
             atomicFramesWritten.fetch_add(written, std::memory_order_relaxed);
             writtenTotal += written;
-            if (written < chunkFrames) break;   // device backpressured
+            if (written < static_cast<int32_t>(chunkFrames)) {
+                shortWriteCount_.fetch_add(1, std::memory_order_relaxed);
+                break;   // device backpressured
+            }
         }
         return writtenTotal;
     }
@@ -470,6 +477,11 @@ public:
     std::atomic<int64_t> diagNanCount_{0};
     std::atomic<int64_t> diagInfCount_{0};
     std::atomic<int64_t> diagSpikeCount_{0};
+    // Phase 6: Starvation/underrun counters (CRACKLE ROOT-CAUSE VECTOR B telemetry)
+    std::atomic<int64_t> underrunCount_{0};        // HAL underrun (ErrorTimeout on write)
+    std::atomic<int64_t> zeroWriteCount_{0};       // write() returned 0 frames (device not ready)
+    std::atomic<int64_t> shortWriteCount_{0};      // write() returned fewer frames than requested
+    std::atomic<int64_t> nativeWriteErrorCount_{0}; // hard write errors (not timeout)
 #if defined(DEBUG_AUDIO_DIAGNOSTICS)
     float lastSampleForSpike_ = 0.0f;
     
@@ -541,6 +553,10 @@ public:
         diagNanCount_.store(0, std::memory_order_relaxed);
         diagInfCount_.store(0, std::memory_order_relaxed);
         diagSpikeCount_.store(0, std::memory_order_relaxed);
+        underrunCount_.store(0, std::memory_order_relaxed);
+        zeroWriteCount_.store(0, std::memory_order_relaxed);
+        shortWriteCount_.store(0, std::memory_order_relaxed);
+        nativeWriteErrorCount_.store(0, std::memory_order_relaxed);
         resampler.reset();
         dsp.reset();
         transitionState(NativeLifecycleState::CLOSED);
@@ -1006,6 +1022,21 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_openStream(
     wrapper->resampler.configure(sampleRate, actualStreamRate,
                                  actualChannels, antigravity::ResampleQuality::SINC_FAST);
 
+    // CRACKLE ROOT-CAUSE VECTOR B: In Shared/LowLatency mode, Oboe defaults to
+    // the minimum buffer (often 1 burst = 192 frames = 4ms @ 48kHz). Under system
+    // jitter (GC, compositor, thermal throttling) the HAL drains this before the
+    // next write arrives, causing an underrun gap/crackle. Enlarge to max(burst*4, 2048)
+    // giving ~42ms cushion while keeping latency acceptable for playback.
+    {
+        const int32_t burst = wrapper->stream->getFramesPerBurst();
+        const int32_t capacity = wrapper->stream->getBufferCapacityInFrames();
+        const int32_t desired = std::max(burst * 4, 2048);
+        const int32_t target = std::min(desired, capacity);
+        wrapper->stream->setBufferSizeInFrames(target);
+        LOGI("Buffer sizing: burst=%d capacity=%d target=%d (actual=%d)",
+             burst, capacity, target, wrapper->stream->getBufferSizeInFrames());
+    }
+
     // Rule 4: Step 6 - Keep stream in OPEN state until explicitly started by AudioSink.play()
     wrapper->rawStream_.store(wrapper->stream.get(), std::memory_order_release);
     wrapper->transitionState(NativeLifecycleState::OPEN);
@@ -1195,6 +1226,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
             activeStream->write(scratch, numFrames, kWriteTimeoutNs);
         if (result.error() != oboe::Result::OK) {
             if (result.error() == oboe::Result::ErrorTimeout) {
+                wrapper->underrunCount_.fetch_add(1, std::memory_order_relaxed);
                 const int32_t timeouts =
                     wrapper->consecutiveTimeouts.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (timeouts > kMaxConsecutiveTimeouts) {
@@ -1205,6 +1237,7 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
                 }
                 return 0;   // nothing consumed; caller retries same data
             }
+            wrapper->nativeWriteErrorCount_.fetch_add(1, std::memory_order_relaxed);
             wrapper->isActive.store(false, std::memory_order_release);
             return kErrStaleOrWrite;
         }
@@ -1214,6 +1247,11 @@ Java_com_tensorix_antigravityplayer_audio_OboeBridge_writeDirect(
         if (written > 0) {
             wrapper->atomicFramesWritten.fetch_add(written, std::memory_order_relaxed);
             wrapper->outputFramesProduced_.fetch_add(written, std::memory_order_relaxed);
+            if (written < numFrames) {
+                wrapper->shortWriteCount_.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            wrapper->zeroWriteCount_.fetch_add(1, std::memory_order_relaxed);
         }
         return std::min(written, numFrames);
     }
@@ -1961,13 +1999,18 @@ JNIEXPORT jlongArray JNICALL
 Java_com_tensorix_antigravityplayer_audio_OboeBridge_getDiagnostics(JNIEnv *env, jobject thiz, jlong handle) {
     auto wrapper = getStream(handle);
     if (!wrapper) return nullptr;
-    jlongArray result = env->NewLongArray(3);
+    // Expanded: [0]=nans [1]=infs [2]=spikes [3]=underruns [4]=zeroWrites [5]=shortWrites [6]=hardErrors
+    jlongArray result = env->NewLongArray(7);
     if (result) {
-        jlong arr[3];
+        jlong arr[7];
         arr[0] = wrapper->diagNanCount_.load(std::memory_order_relaxed);
         arr[1] = wrapper->diagInfCount_.load(std::memory_order_relaxed);
         arr[2] = wrapper->diagSpikeCount_.load(std::memory_order_relaxed);
-        env->SetLongArrayRegion(result, 0, 3, arr);
+        arr[3] = wrapper->underrunCount_.load(std::memory_order_relaxed);
+        arr[4] = wrapper->zeroWriteCount_.load(std::memory_order_relaxed);
+        arr[5] = wrapper->shortWriteCount_.load(std::memory_order_relaxed);
+        arr[6] = wrapper->nativeWriteErrorCount_.load(std::memory_order_relaxed);
+        env->SetLongArrayRegion(result, 0, 7, arr);
     }
     return result;
 }

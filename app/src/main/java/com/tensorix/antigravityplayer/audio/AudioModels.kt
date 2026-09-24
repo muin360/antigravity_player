@@ -16,7 +16,7 @@ enum class AudioOutputRouteType(val displayName: String) {
 }
 
 enum class ListeningMode(val displayName: String, val badge: String, val description: String) {
-    REFERENCE("Reference Mode", "STUDIO", "Pure neutral uncolored studio mastering baseline (0.0 dB gain, 0.0 dBFS true-peak)"),
+    REFERENCE("Reference (Transparent)", "REFERENCE", "Pure transparent decoded PCM path (0 DSP, 0 EQ, 0 effects)"),
     AUDIOPHILE("Audiophile Mode", "64-BIT DSP", "64-bit double precision biquads, triode tube warmth, Meier crossfeed, and +3.5 dB dynamic headroom"),
     DYNAMIC("Dynamic Mode", "PUNCH & AIR", "Fletcher-Munson dynamic loudness, +3.5 dB clarity enhancement, and +2.0 dB high-end air presence")
 }

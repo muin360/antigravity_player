@@ -619,11 +619,22 @@ class OboeAudioSink(
         val bytesPerFrame = channelCount * bytesPerSample
         if (bytesPerFrame <= 0) return true
 
+        // ---- Phase 1+3: True Reference Path DSP bypass (CRACKLE ROOT-CAUSE VECTOR C) ----
+        // In standard Shared playback bitPerfectMode is always false, so C++ AudiophileDsp::process()
+        // was running on EVERY block even in Reference/disabled mode — applying pre-amp, limiter,
+        // dither, DC removal. Compute isDspBypassed from ALL authoritative DSP state sources.
+        val isDspBypassed = bitPerfectMode
+            || (equalizerEngine?.isBitPerfectBypass?.value == true)
+            || (equalizerEngine?.isEnabled?.value == false)
+            || (equalizerEngine?.listeningMode?.value == ListeningMode.REFERENCE)
+            || (dspProcessor?.isBitPerfectBypass == true)
+
         // Complete any pending partial frame from previous calls
+        var needed = 0
         if (hasPartialFrames) {
                 synchronized(bufferLock) {
                     val pendingBytes = partialFrameBuffer.position()
-                    val needed = bytesPerFrame - pendingBytes
+                    needed = bytesPerFrame - pendingBytes
                     if (buffer.remaining() < needed) {
                         // Not enough bytes to complete 1 frame; append to staging and return
                         if (partialFrameBuffer.remaining() >= buffer.remaining()) {
@@ -654,13 +665,17 @@ class OboeAudioSink(
                     numBytes = bytesPerFrame,
                     numFrames = 1,
                     pcmEncoding = pcmEncoding,
-                    isBitPerfect = bitPerfectMode
+                    isBitPerfect = isDspBypassed
                 )
                 if (stitchedResult > 0) {
                     synchronized(bufferLock) { partialFrameBuffer.clear() }
                 } else if (stitchedResult == 0) {
-                    // Cannot write yet; restore buffer and retry
-                    buffer.position(buffer.position() - (bytesPerFrame - synchronized(bufferLock) { partialFrameBuffer.limit() }))
+                    // Cannot write yet; restore consumed bytes back to buffer position.
+                    // CRACKLE ROOT-CAUSE VECTOR D (partial frame staging bug): previously
+                    // subtracted (bytesPerFrame - partialFrameBuffer.limit()) which evaluated
+                    // to 0 because limit() == bytesPerFrame after flip(), failing to restore
+                    // the 'needed' bytes consumed from buffer to complete the partial frame.
+                    buffer.position(buffer.position() - needed)
                     synchronized(bufferLock) {
                         partialFrameBuffer.position(partialFrameBuffer.limit())
                         partialFrameBuffer.limit(partialFrameBuffer.capacity())
@@ -727,7 +742,7 @@ class OboeAudioSink(
                     numBytes = bytesToWrite,
                     numFrames = framesToWrite,
                     pcmEncoding = pcmEncoding,
-                    isBitPerfect = bitPerfectMode
+                    isBitPerfect = isDspBypassed
                 )
             } else {
                 directByteBuffer.clear()
@@ -745,7 +760,7 @@ class OboeAudioSink(
                     numBytes = bytesToWrite,
                     numFrames = framesToWrite,
                     pcmEncoding = pcmEncoding,
-                    isBitPerfect = bitPerfectMode
+                    isBitPerfect = isDspBypassed
                 )
             }
 
